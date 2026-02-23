@@ -199,6 +199,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "archive"
+version = "0.1.0"
+dependencies = [
+ "memmap2",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -793,6 +800,16 @@ checksum = "71ddb8ac7643d1dba1bb02110e804406dd459a838efcb14011ced10556711a8e"
 dependencies = [
  "bytemuck",
  "emath",
+]
+
+[[package]]
+name = "editor"
+version = "0.1.0"
+dependencies = [
+ "archive",
+ "eframe",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2593,15 +2610,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "shadows-map-editor"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
