@@ -1,0 +1,20 @@
+[package]
+name = "shadows-map-editor"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "map-editor"
+path = "src/main.rs"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = 2
+panic = "abort"
+strip = "symbols"
+
+[dependencies]
+eframe = "0.33"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
