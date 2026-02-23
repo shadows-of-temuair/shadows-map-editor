@@ -59,12 +59,10 @@ impl TitleBarPanel {
                 egui::Sense::click_and_drag(),
             );
             if title_response.dragged() {
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
             if title_response.double_clicked() {
-                let is_fullscreen =
-                    ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                let is_fullscreen = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
                 ui.ctx()
                     .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
             }
@@ -73,23 +71,18 @@ impl TitleBarPanel {
             let buttons_x = rect.right() - 46.0 * 3.0;
             ui.allocate_space(egui::vec2(buttons_x - rect.left(), 0.0));
 
-            if title_bar_icon_button(ui, TitleBarIcon::Minimize, TITLE_BAR_HEIGHT, colors)
-                .clicked()
+            if title_bar_icon_button(ui, TitleBarIcon::Minimize, TITLE_BAR_HEIGHT, colors).clicked()
             {
                 ui.ctx()
                     .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             }
-            if title_bar_icon_button(ui, TitleBarIcon::Maximize, TITLE_BAR_HEIGHT, colors)
-                .clicked()
+            if title_bar_icon_button(ui, TitleBarIcon::Maximize, TITLE_BAR_HEIGHT, colors).clicked()
             {
-                let is_fullscreen =
-                    ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                let is_fullscreen = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
                 ui.ctx()
                     .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
             }
-            if title_bar_icon_button(ui, TitleBarIcon::Close, TITLE_BAR_HEIGHT, colors)
-                .clicked()
-            {
+            if title_bar_icon_button(ui, TitleBarIcon::Close, TITLE_BAR_HEIGHT, colors).clicked() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
             }
         });

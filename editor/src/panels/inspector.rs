@@ -58,8 +58,20 @@ impl InspectorPanel {
         // Tab bar
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
-            Self::tab_button(ui, "Tileset", &mut self.active_tab, InspectorTab::Tileset, colors);
-            Self::tab_button(ui, "Properties", &mut self.active_tab, InspectorTab::Properties, colors);
+            Self::tab_button(
+                ui,
+                "Tileset",
+                &mut self.active_tab,
+                InspectorTab::Tileset,
+                colors,
+            );
+            Self::tab_button(
+                ui,
+                "Properties",
+                &mut self.active_tab,
+                InspectorTab::Properties,
+                colors,
+            );
         });
 
         ui.add_space(10.0);
@@ -89,17 +101,17 @@ impl InspectorPanel {
         colors: &ThemeColors,
     ) {
         let is_active = *active == tab;
-        let text_color = if is_active { colors.accent } else { colors.muted };
+        let text_color = if is_active {
+            colors.accent
+        } else {
+            colors.muted
+        };
 
         let response = ui.add(
-            egui::Button::new(
-                egui::RichText::new(label)
-                    .size(12.0)
-                    .color(text_color),
-            )
-            .fill(egui::Color32::TRANSPARENT)
-            .stroke(egui::Stroke::NONE)
-            .corner_radius(4.0),
+            egui::Button::new(egui::RichText::new(label).size(12.0).color(text_color))
+                .fill(egui::Color32::TRANSPARENT)
+                .stroke(egui::Stroke::NONE)
+                .corner_radius(4.0),
         );
 
         if is_active {
@@ -137,18 +149,20 @@ impl InspectorPanel {
                 } else {
                     colors.panel_2
                 };
-                let text_color = if selected { colors.accent } else { colors.muted };
+                let text_color = if selected {
+                    colors.accent
+                } else {
+                    colors.muted
+                };
                 ui.add(
-                    egui::Button::new(
-                        egui::RichText::new(*cat).size(11.0).color(text_color),
-                    )
-                    .fill(bg)
-                    .stroke(if selected {
-                        egui::Stroke::new(1.0, colors.accent.gamma_multiply(0.4))
-                    } else {
-                        egui::Stroke::NONE
-                    })
-                    .corner_radius(4.0),
+                    egui::Button::new(egui::RichText::new(*cat).size(11.0).color(text_color))
+                        .fill(bg)
+                        .stroke(if selected {
+                            egui::Stroke::new(1.0, colors.accent.gamma_multiply(0.4))
+                        } else {
+                            egui::Stroke::NONE
+                        })
+                        .corner_radius(4.0),
                 );
             }
         });
@@ -156,11 +170,7 @@ impl InspectorPanel {
         ui.add_space(12.0);
 
         // Tileset grid placeholder
-        ui.label(
-            egui::RichText::new("Tiles")
-                .size(11.0)
-                .color(colors.muted),
-        );
+        ui.label(egui::RichText::new("Tiles").size(11.0).color(colors.muted));
         ui.add_space(4.0);
 
         let available = ui.available_size();
@@ -179,12 +189,12 @@ impl InspectorPanel {
             for col in 0..cols {
                 let x = rect.left() + col as f32 * (tile_size + padding);
                 let y = rect.top() + row as f32 * (tile_size + padding);
-                let tile_rect = egui::Rect::from_min_size(
-                    egui::pos2(x, y),
-                    egui::vec2(tile_size, tile_size),
-                );
+                let tile_rect =
+                    egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(tile_size, tile_size));
 
-                if tile_rect.right() <= rect.right() + 1.0 && tile_rect.bottom() <= rect.bottom() + 1.0 {
+                if tile_rect.right() <= rect.right() + 1.0
+                    && tile_rect.bottom() <= rect.bottom() + 1.0
+                {
                     ui.painter().rect(
                         tile_rect,
                         3.0,
@@ -215,17 +225,9 @@ impl InspectorPanel {
 
         for (label, value) in &props {
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(*label)
-                        .size(12.0)
-                        .color(colors.muted),
-                );
+                ui.label(egui::RichText::new(*label).size(12.0).color(colors.muted));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        egui::RichText::new(*value)
-                            .size(12.0)
-                            .color(colors.text),
-                    );
+                    ui.label(egui::RichText::new(*value).size(12.0).color(colors.text));
                 });
             });
             ui.add_space(2.0);

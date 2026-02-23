@@ -57,19 +57,11 @@ impl StatusBarPanel {
                     Self::separator(ui, &colors);
 
                     // Cursor position placeholder
-                    ui.label(
-                        egui::RichText::new("Pos: -")
-                            .size(11.0)
-                            .color(colors.muted),
-                    );
+                    ui.label(egui::RichText::new("Pos: -").size(11.0).color(colors.muted));
 
                     // Right-aligned status
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            egui::RichText::new("Ready")
-                                .size(11.0)
-                                .color(colors.accent),
-                        );
+                        ui.label(egui::RichText::new("Ready").size(11.0).color(colors.accent));
                     });
                 });
             });
@@ -77,7 +69,6 @@ impl StatusBarPanel {
 
     fn separator(ui: &mut egui::Ui, colors: &crate::theme::ThemeColors) {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 14.0), egui::Sense::hover());
-        ui.painter()
-            .rect_filled(rect, 0.0, colors.border);
+        ui.painter().rect_filled(rect, 0.0, colors.border);
     }
 }
