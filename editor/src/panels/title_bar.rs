@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use crate::theme::{ThemeColors, theme_colors};
+use crate::theme::{ThemeColors, draw_grid_icon, theme_colors};
 use crate::widgets::{TitleBarIcon, title_bar_icon_button};
 
 const TITLE_BAR_HEIGHT: f32 = 36.0;
@@ -35,13 +35,21 @@ impl TitleBarPanel {
             egui::Stroke::new(1.0, colors.border),
         );
 
-        // Title text
-        let text_rect = rect.shrink2(egui::vec2(14.0, 0.0));
+        // Icon + title text
+        let icon_size = 22.0;
+        let icon_left = rect.left() + 12.0;
+        let icon_rect = egui::Rect::from_center_size(
+            egui::pos2(icon_left + icon_size / 2.0, rect.center().y),
+            egui::vec2(icon_size, icon_size),
+        );
+        draw_grid_icon(ui.painter(), icon_rect, colors);
+
+        let text_left = icon_rect.right() + 12.0;
         ui.painter().text(
-            egui::pos2(text_rect.left(), text_rect.center().y),
+            egui::pos2(text_left, rect.center().y),
             egui::Align2::LEFT_CENTER,
             "Shadows Map Editor",
-            egui::FontId::proportional(13.0),
+            egui::FontId::proportional(14.0),
             colors.muted,
         );
 

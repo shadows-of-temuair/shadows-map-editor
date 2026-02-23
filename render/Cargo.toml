@@ -7,3 +7,4 @@ version.workspace = true
 
 [dev-dependencies]
 archive = { path = "../archive" }
+png = "0.18"

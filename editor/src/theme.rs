@@ -81,3 +81,45 @@ pub fn apply_theme(ctx: &egui::Context) {
 
     ctx.set_style(style);
 }
+
+/// Draws the isometric grid icon (matching the app icon) into a given rect.
+pub fn draw_grid_icon(painter: &egui::Painter, rect: egui::Rect, colors: &ThemeColors) {
+    let size = rect.width().min(rect.height());
+    let icon_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(size, size));
+    let cx = icon_rect.center().x;
+    let cy = icon_rect.center().y;
+
+    // Isometric diamond — 2:1 width:height
+    let grid_h = size * 0.34;
+    let grid_w = grid_h * 2.0;
+
+    let top = egui::pos2(cx, cy - grid_h);
+    let right = egui::pos2(cx + grid_w, cy);
+    let bottom = egui::pos2(cx, cy + grid_h);
+    let left = egui::pos2(cx - grid_w, cy);
+
+    let outer_stroke = egui::Stroke::new(size * 0.06, colors.accent);
+    let inner_stroke = egui::Stroke::new(size * 0.035, colors.accent);
+
+    // Outer diamond
+    painter.line_segment([top, right], outer_stroke);
+    painter.line_segment([right, bottom], outer_stroke);
+    painter.line_segment([bottom, left], outer_stroke);
+    painter.line_segment([left, top], outer_stroke);
+
+    // Inner grid lines
+    for i in 1..3 {
+        let t = i as f32 / 3.0;
+        let from = lerp_pos(left, top, t);
+        let to = lerp_pos(bottom, right, t);
+        painter.line_segment([from, to], inner_stroke);
+
+        let from = lerp_pos(top, right, t);
+        let to = lerp_pos(left, bottom, t);
+        painter.line_segment([from, to], inner_stroke);
+    }
+}
+
+fn lerp_pos(a: egui::Pos2, b: egui::Pos2, t: f32) -> egui::Pos2 {
+    egui::pos2(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
+}
