@@ -7,6 +7,7 @@ use crate::document::{LayerVisibility, MapDocument};
 use crate::panels::{
     ExportDialog, ExportDialogAction, InspectorPanel, StatusBarAction, StatusBarPanel,
     TabBarAction, TabBarPanel, TitleBarPanel, Tool, ToolbarAction, ToolbarPanel, ViewportPanel,
+    WindowFrame,
 };
 use crate::theme;
 
@@ -504,6 +505,8 @@ impl eframe::App for EditorApp {
         // Deferred atlas uploads
         self.try_upload_atlas(ctx);
         self.try_upload_wall_atlas(ctx);
+
+        WindowFrame::show(ctx);
 
         self.handle_keyboard_shortcuts(ctx);
         self.handle_dropped_files(ctx);
