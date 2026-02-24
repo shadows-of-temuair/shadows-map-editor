@@ -108,7 +108,7 @@ impl InspectorPanel {
         };
 
         let response = ui.add(
-            egui::Button::new(egui::RichText::new(label).size(12.0).color(text_color))
+            egui::Button::new(egui::RichText::new(label).size(14.0).color(text_color))
                 .fill(egui::Color32::TRANSPARENT)
                 .stroke(egui::Stroke::NONE)
                 .corner_radius(4.0),
@@ -134,7 +134,7 @@ impl InspectorPanel {
         // Category selector
         ui.label(
             egui::RichText::new("Category")
-                .size(11.0)
+                .size(13.0)
                 .color(colors.muted),
         );
         ui.add_space(4.0);
@@ -155,7 +155,7 @@ impl InspectorPanel {
                     colors.muted
                 };
                 ui.add(
-                    egui::Button::new(egui::RichText::new(*cat).size(11.0).color(text_color))
+                    egui::Button::new(egui::RichText::new(*cat).size(13.0).color(text_color))
                         .fill(bg)
                         .stroke(if selected {
                             egui::Stroke::new(1.0, colors.accent.gamma_multiply(0.4))
@@ -170,7 +170,7 @@ impl InspectorPanel {
         ui.add_space(12.0);
 
         // Tileset grid placeholder
-        ui.label(egui::RichText::new("Tiles").size(11.0).color(colors.muted));
+        ui.label(egui::RichText::new("Tiles").size(13.0).color(colors.muted));
         ui.add_space(4.0);
 
         let available = ui.available_size();
@@ -210,7 +210,7 @@ impl InspectorPanel {
     fn draw_properties_tab(&self, ui: &mut egui::Ui, colors: &ThemeColors) {
         ui.label(
             egui::RichText::new("Selection")
-                .size(11.0)
+                .size(13.0)
                 .color(colors.muted),
         );
         ui.add_space(6.0);
@@ -225,9 +225,9 @@ impl InspectorPanel {
 
         for (label, value) in &props {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(*label).size(12.0).color(colors.muted));
+                ui.label(egui::RichText::new(*label).size(14.0).color(colors.muted));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new(*value).size(12.0).color(colors.text));
+                    ui.label(egui::RichText::new(*value).size(14.0).color(colors.text));
                 });
             });
             ui.add_space(2.0);

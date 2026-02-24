@@ -4,7 +4,7 @@
 )]
 
 mod app;
-mod map;
+mod document;
 mod panels;
 mod theme;
 mod widgets;

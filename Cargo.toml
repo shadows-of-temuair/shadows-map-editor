@@ -1,5 +1,5 @@
 [workspace]
-members = ["archive", "render", "editor"]
+members = ["archive", "map", "render", "editor"]
 resolver = "3"
 
 [workspace.package]
