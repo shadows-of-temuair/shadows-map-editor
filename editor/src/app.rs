@@ -25,6 +25,7 @@ pub struct EditorApp {
     hover_tile: (u16, u16),
     selected_tile: Option<(u16, u16)>,
     export_dialog: ExportDialog,
+    status_message: String,
     atlas_needs_upload: bool,
     wall_atlas_needs_upload: bool,
 }
@@ -54,6 +55,7 @@ impl EditorApp {
             hover_tile: (0, 0),
             selected_tile: None,
             export_dialog: ExportDialog::default(),
+            status_message: String::from("Ready"),
         }
     }
 
@@ -520,8 +522,14 @@ impl eframe::App for EditorApp {
 
         let doc = &self.documents[self.active_tab];
         let current_zoom = doc.camera.zoom;
-        let status_action =
-            StatusBarPanel::show(ctx, &doc.map, self.active_tool, self.hover_tile, current_zoom);
+        let status_action = StatusBarPanel::show(
+            ctx,
+            &doc.map,
+            self.active_tool,
+            self.hover_tile,
+            current_zoom,
+            &self.status_message,
+        );
         match status_action {
             StatusBarAction::ZoomIn => {
                 Self::snap_zoom(&mut self.documents[self.active_tab].camera, 1);
@@ -559,16 +567,27 @@ impl eframe::App for EditorApp {
                     bg_color,
                     tab_map,
                 } => {
+                    let filename = path
+                        .file_name()
+                        .and_then(|f| f.to_str())
+                        .unwrap_or("file")
+                        .to_owned();
+                    self.status_message = format!("Exporting {}...", filename);
+
+                    let mut ok = false;
                     if let (Some(ta), Some(wa)) = (&self.tile_atlas, &self.wall_atlas) {
                         if let Err(e) =
                             crate::export::export_map_png(&path, &doc.map, ta, wa, zoom, bg_color)
                         {
                             warn!("Export failed: {}", e);
+                            self.status_message = format!("Export failed: {}", e);
                         } else {
                             info!("Exported to {}", path.display());
+                            ok = true;
                         }
                     } else {
                         warn!("Cannot export: atlases not loaded");
+                        self.status_message = "Export failed: atlases not loaded".into();
                     }
                     // Export tab map alongside if enabled
                     if let Some(tm) = tab_map {
@@ -582,12 +601,17 @@ impl eframe::App for EditorApp {
                                 tm.bg_color,
                             ) {
                                 warn!("Tab map export failed: {}", e);
+                                self.status_message = format!("Tab map export failed: {}", e);
+                                ok = false;
                             } else {
                                 info!("Exported tab map to {}", tm_path.display());
                             }
                         } else {
                             warn!("Cannot export tab map: SOTP data not loaded");
                         }
+                    }
+                    if ok {
+                        self.status_message = format!("Exported {}.", filename);
                     }
                 }
                 ExportDialogAction::None => {}

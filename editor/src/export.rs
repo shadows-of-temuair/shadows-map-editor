@@ -270,7 +270,7 @@ fn blit_scaled(
 }
 
 /// Derive the tab map output path from the main export path.
-/// e.g. "foo.png" → "foo_tabmap.png"
+/// e.g. "foo.png" → "foo_tab.png"
 pub fn tab_map_path(main_path: &Path) -> std::path::PathBuf {
     let stem = main_path
         .file_stem()
@@ -280,7 +280,7 @@ pub fn tab_map_path(main_path: &Path) -> std::path::PathBuf {
         .extension()
         .and_then(|s| s.to_str())
         .unwrap_or("png");
-    main_path.with_file_name(format!("{}_tabmap.{}", stem, ext))
+    main_path.with_file_name(format!("{}_tab.{}", stem, ext))
 }
 
 // --- Tab Map export ---

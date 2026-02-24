@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use eframe::egui;
 
-use crate::theme::theme_colors;
+use crate::theme::{ThemeColors, theme_colors};
 
 pub struct ExportDialog {
     open: bool,
@@ -103,7 +103,7 @@ impl ExportDialog {
                     .inner_margin(egui::Margin::same(24)),
             )
             .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(8.0, 12.0);
+                ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 
                 // Title
                 ui.label(
@@ -112,18 +112,16 @@ impl ExportDialog {
                         .strong()
                         .color(colors.text),
                 );
+
                 ui.add_space(4.0);
 
-                // Filename
-                ui.label(
-                    egui::RichText::new("Filename")
-                        .size(13.0)
-                        .color(colors.muted),
-                );
+                // --- Filename ---
+                Self::field_label(ui, &colors, "Filename");
                 ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
                     ui.add(
                         egui::TextEdit::singleline(&mut self.filename)
-                            .desired_width(340.0)
+                            .desired_width(ui.available_width() - 80.0)
                             .font(egui::FontId::proportional(14.0))
                             .margin(egui::Margin::symmetric(8, 6)),
                     );
@@ -150,77 +148,47 @@ impl ExportDialog {
 
                 ui.add_space(4.0);
 
-                // Scale
-                ui.label(
-                    egui::RichText::new("Scale")
-                        .size(13.0)
-                        .color(colors.muted),
+                // --- Scale ---
+                Self::scale_row(
+                    ui,
+                    &colors,
+                    &mut self.scale_percent,
                 );
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
-                    let mut scale_slot = (self.scale_percent / 25) as i32;
-                    let slider_w = ui.available_width() - 50.0;
-                    let slider = egui::Slider::new(&mut scale_slot, 1..=16)
-                        .show_value(false)
-                        .trailing_fill(true);
-                    ui.add_sized(egui::vec2(slider_w, 20.0), slider);
-                    self.scale_percent = (scale_slot as u32) * 25;
-                    ui.label(
-                        egui::RichText::new(format!("{}%", self.scale_percent))
-                            .size(14.0)
-                            .strong()
-                            .color(colors.text),
-                    );
-                });
 
-                // Background color
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
-                    ui.add(egui::Checkbox::without_text(&mut self.bg_enabled));
-                    ui.label(
-                        egui::RichText::new("Background")
-                            .size(13.0)
-                            .color(if self.bg_enabled { colors.text } else { colors.muted }),
-                    );
-                    if self.bg_enabled {
-                        let mut c = egui::Color32::from_rgb(
-                            self.bg_color[0],
-                            self.bg_color[1],
-                            self.bg_color[2],
-                        );
-                        ui.color_edit_button_srgba(&mut c);
-                        self.bg_color = [c.r(), c.g(), c.b()];
-                    }
-                });
+                ui.add_space(4.0);
 
-                ui.add_space(2.0);
+                // --- Background color ---
+                Self::background_row(
+                    ui,
+                    &colors,
+                    &mut self.bg_enabled,
+                    &mut self.bg_color,
+                );
+
+                ui.add_space(4.0);
 
                 // Output dimensions
                 let zoom = self.scale_percent as f32 / 100.0;
                 let (out_w, out_h) =
                     crate::export::compute_output_dimensions(map, zoom, wall_atlas);
                 ui.label(
-                    egui::RichText::new(format!("Output size: {} \u{00D7} {} px", out_w, out_h))
-                        .size(13.0)
+                    egui::RichText::new(format!("Output: {} \u{00D7} {} px", out_w, out_h))
+                        .size(12.0)
                         .color(colors.muted),
                 );
 
+                ui.add_space(6.0);
+                Self::separator(ui, &colors);
                 ui.add_space(4.0);
 
                 // --- Tab Map section ---
-                let (sep_rect, _) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), 1.0),
-                    egui::Sense::hover(),
-                );
-                ui.painter().rect_filled(sep_rect, 0.0, colors.border);
-                ui.add_space(4.0);
-
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
                     ui.add(egui::Checkbox::without_text(&mut self.tab_map_enabled));
                     ui.label(
                         egui::RichText::new("Export Tab Map")
                             .size(14.0)
+                            .strong()
                             .color(if self.tab_map_enabled {
                                 colors.text
                             } else {
@@ -230,83 +198,46 @@ impl ExportDialog {
                 });
 
                 if self.tab_map_enabled {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
-                        ui.add_space(24.0);
-                        ui.label(
-                            egui::RichText::new("Scale")
-                                .size(13.0)
-                                .color(colors.muted),
-                        );
-                        let mut tm_slot = (self.tab_map_scale_percent / 25) as i32;
-                        let slider_w = ui.available_width() - 50.0;
-                        let slider = egui::Slider::new(&mut tm_slot, 1..=16)
-                            .show_value(false)
-                            .trailing_fill(true);
-                        ui.add_sized(egui::vec2(slider_w, 20.0), slider);
-                        self.tab_map_scale_percent = (tm_slot as u32) * 25;
-                        ui.label(
-                            egui::RichText::new(format!("{}%", self.tab_map_scale_percent))
-                                .size(14.0)
-                                .strong()
-                                .color(colors.text),
-                        );
-                    });
+                    ui.add_space(4.0);
 
-                    // Tab map background color
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
-                        ui.add_space(24.0);
-                        ui.add(egui::Checkbox::without_text(&mut self.tab_map_bg_enabled));
-                        ui.label(
-                            egui::RichText::new("Background")
-                                .size(13.0)
-                                .color(if self.tab_map_bg_enabled {
-                                    colors.text
-                                } else {
-                                    colors.muted
-                                }),
-                        );
-                        if self.tab_map_bg_enabled {
-                            let mut c = egui::Color32::from_rgb(
-                                self.tab_map_bg_color[0],
-                                self.tab_map_bg_color[1],
-                                self.tab_map_bg_color[2],
-                            );
-                            ui.color_edit_button_srgba(&mut c);
-                            self.tab_map_bg_color = [c.r(), c.g(), c.b()];
-                        }
-                    });
+                    // Tab map scale (same layout as map scale, no indent)
+                    Self::scale_row(
+                        ui,
+                        &colors,
+                        &mut self.tab_map_scale_percent,
+                    );
+
+                    ui.add_space(4.0);
+
+                    // Tab map background color (no indent)
+                    Self::background_row(
+                        ui,
+                        &colors,
+                        &mut self.tab_map_bg_enabled,
+                        &mut self.tab_map_bg_color,
+                    );
+
+                    ui.add_space(4.0);
 
                     // Tab map output dimensions
                     let tm_zoom = self.tab_map_scale_percent as f32 / 100.0;
                     let (tm_w, tm_h) =
                         crate::export::compute_tab_map_dimensions(map, tm_zoom);
-                    ui.horizontal(|ui| {
-                        ui.add_space(24.0);
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "Tab map size: {} \u{00D7} {} px",
-                                tm_w, tm_h
-                            ))
-                            .size(13.0)
-                            .color(colors.muted),
-                        );
-                    });
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Tab map: {} \u{00D7} {} px",
+                            tm_w, tm_h
+                        ))
+                        .size(12.0)
+                        .color(colors.muted),
+                    );
                 }
 
+                ui.add_space(6.0);
+                Self::separator(ui, &colors);
                 ui.add_space(4.0);
 
-                // Separator
-                let (sep_rect2, _) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), 1.0),
-                    egui::Sense::hover(),
-                );
-                ui.painter().rect_filled(sep_rect2, 0.0, colors.border);
-
-                ui.add_space(4.0);
-
-                // Buttons (right-aligned)
+                // --- Buttons (right-aligned) ---
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
@@ -376,5 +307,84 @@ impl ExportDialog {
             });
 
         action
+    }
+
+    // --- Reusable row helpers ---
+
+    /// Muted field label.
+    fn field_label(ui: &mut egui::Ui, colors: &ThemeColors, text: &str) {
+        ui.label(
+            egui::RichText::new(text)
+                .size(13.0)
+                .color(colors.muted),
+        );
+    }
+
+    /// "Scale" label + slider + percentage on one row.
+    fn scale_row(
+        ui: &mut egui::Ui,
+        colors: &ThemeColors,
+        scale_percent: &mut u32,
+    ) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+            ui.label(
+                egui::RichText::new("Scale")
+                    .size(13.0)
+                    .color(colors.muted),
+            );
+            let mut slot = (*scale_percent / 25) as i32;
+            let slider_w = ui.available_width() - 50.0;
+            let slider = egui::Slider::new(&mut slot, 1..=16)
+                .show_value(false)
+                .trailing_fill(true);
+            ui.add_sized(egui::vec2(slider_w, 20.0), slider);
+            *scale_percent = (slot as u32) * 25;
+            ui.label(
+                egui::RichText::new(format!("{}%", *scale_percent))
+                    .size(14.0)
+                    .strong()
+                    .color(colors.text),
+            );
+        });
+    }
+
+    /// Checkbox + "Background" label + color picker swatch with visible border.
+    fn background_row(
+        ui: &mut egui::Ui,
+        colors: &ThemeColors,
+        enabled: &mut bool,
+        color: &mut [u8; 3],
+    ) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+            ui.add(egui::Checkbox::without_text(enabled));
+            ui.label(
+                egui::RichText::new("Background")
+                    .size(13.0)
+                    .color(if *enabled { colors.text } else { colors.muted }),
+            );
+            if *enabled {
+                let mut c = egui::Color32::from_rgb(color[0], color[1], color[2]);
+                let resp = ui.color_edit_button_srgba(&mut c);
+                *color = [c.r(), c.g(), c.b()];
+                // Draw a visible border around the swatch so dark colors don't disappear
+                ui.painter().rect_stroke(
+                    resp.rect,
+                    2.0,
+                    egui::Stroke::new(1.0, colors.border),
+                    egui::StrokeKind::Outside,
+                );
+            }
+        });
+    }
+
+    /// Full-width horizontal separator line.
+    fn separator(ui: &mut egui::Ui, colors: &ThemeColors) {
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), 1.0),
+            egui::Sense::hover(),
+        );
+        ui.painter().rect_filled(rect, 0.0, colors.border);
     }
 }

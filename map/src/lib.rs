@@ -98,7 +98,8 @@ impl Map {
 }
 
 /// Returns all valid (width, height) factor pairs for `n` tiles,
-/// where width >= height. Sorted most-square first (ascending width).
+/// including both orientations (e.g. 4x5 and 5x4).
+/// Sorted by ascending width so the most square pairs are in the middle.
 pub fn all_dimensions(n: usize) -> Vec<(u16, u16)> {
     if n == 0 {
         return vec![(0, 0)];
@@ -107,13 +108,16 @@ pub fn all_dimensions(n: usize) -> Vec<(u16, u16)> {
     let mut d = 1usize;
     while d * d <= n {
         if n % d == 0 {
-            let w = (n / d) as u16;
-            let h = d as u16;
-            pairs.push((w, h)); // w >= h since d <= sqrt(n)
+            let w = d as u16;
+            let h = (n / d) as u16;
+            pairs.push((w, h));
+            if w != h {
+                pairs.push((h, w));
+            }
         }
         d += 1;
     }
-    pairs.reverse(); // most-square first
+    pairs.sort_by_key(|&(w, _)| w);
     pairs
 }
 

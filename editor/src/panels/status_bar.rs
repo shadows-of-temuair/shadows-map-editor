@@ -22,6 +22,7 @@ impl StatusBarPanel {
         active_tool: Tool,
         hover_tile: (u16, u16),
         zoom: f32,
+        status_message: &str,
     ) -> StatusBarAction {
         let colors = theme_colors();
         let mut action = StatusBarAction::None;
@@ -62,16 +63,19 @@ impl StatusBarPanel {
                     Self::separator(ui, &colors);
 
                     // Status (left, accent)
-                    ui.label(egui::RichText::new("Ready").size(13.0).color(colors.accent));
+                    ui.label(egui::RichText::new(status_message).size(13.0).color(colors.accent));
 
                     // Right-aligned section
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
 
-                        // Position (rightmost)
-                        let pos_text = format!("Pos: {}, {}", hover_tile.0, hover_tile.1);
+                        // Position (rightmost) — fixed width to prevent layout jitter
+                        let pos_text = format!("Pos: {:>3}, {:>3}", hover_tile.0, hover_tile.1);
                         ui.label(
-                            egui::RichText::new(pos_text).size(13.0).color(colors.muted),
+                            egui::RichText::new(pos_text)
+                                .size(13.0)
+                                .color(colors.muted)
+                                .family(egui::FontFamily::Monospace),
                         );
 
                         Self::separator(ui, &colors);
@@ -143,14 +147,6 @@ impl StatusBarPanel {
                                                 ))
                                                 .corner_radius(4.0),
                                             );
-                                            // Hover highlight
-                                            if btn.hovered() {
-                                                ui.painter().rect_filled(
-                                                    btn.rect,
-                                                    4.0,
-                                                    colors.bg_3,
-                                                );
-                                            }
                                             if btn.clicked() {
                                                 action =
                                                     StatusBarAction::SetDimensions(w, h);
