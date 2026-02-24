@@ -5,9 +5,8 @@ use tracing::{info, warn};
 
 use crate::document::{LayerVisibility, MapDocument};
 use crate::panels::{
-    ExportDialog, ExportDialogAction, InspectorPanel, SelectedTileInfo, StatusBarAction,
-    StatusBarPanel, TabBarAction, TabBarPanel, TitleBarPanel, Tool, ToolbarAction, ToolbarPanel,
-    ViewportPanel,
+    ExportDialog, ExportDialogAction, InspectorPanel, StatusBarAction, StatusBarPanel,
+    TabBarAction, TabBarPanel, TitleBarPanel, Tool, ToolbarAction, ToolbarPanel, ViewportPanel,
 };
 use crate::theme;
 
@@ -15,7 +14,6 @@ pub struct EditorApp {
     documents: Vec<MapDocument>,
     active_tab: usize,
     active_tool: Tool,
-    inspector: InspectorPanel,
     tab_bar: TabBarPanel,
     layer_visibility: LayerVisibility,
     show_grid: bool,
@@ -23,6 +21,7 @@ pub struct EditorApp {
     atlas_texture: Option<egui::TextureHandle>,
     wall_atlas: Option<render::SpriteAtlas>,
     wall_texture: Option<egui::TextureHandle>,
+    sotp_data: Option<Vec<u8>>,
     hover_tile: (u16, u16),
     selected_tile: Option<(u16, u16)>,
     export_dialog: ExportDialog,
@@ -36,13 +35,12 @@ impl EditorApp {
 
         // Build atlases CPU-side; texture uploads are deferred to first frame
         // because the renderer hasn't reported the real GPU max texture size yet.
-        let (tile_atlas, wall_atlas) = Self::load_assets();
+        let (tile_atlas, wall_atlas, sotp_data) = Self::load_assets();
 
         Self {
             documents: vec![MapDocument::new(50, 50)],
             active_tab: 0,
             active_tool: Tool::Select,
-            inspector: InspectorPanel::default(),
             tab_bar: TabBarPanel::default(),
             layer_visibility: LayerVisibility::default(),
             show_grid: true,
@@ -50,6 +48,7 @@ impl EditorApp {
             wall_atlas_needs_upload: wall_atlas.is_some(),
             tile_atlas,
             wall_atlas,
+            sotp_data,
             atlas_texture: None,
             wall_texture: None,
             hover_tile: (0, 0),
@@ -58,8 +57,8 @@ impl EditorApp {
         }
     }
 
-    /// Load all assets from the archive: tile atlas and wall sprite atlas.
-    fn load_assets() -> (Option<render::TileAtlas>, Option<render::SpriteAtlas>) {
+    /// Load all assets from the archive: tile atlas, wall sprite atlas, and SOTP collision data.
+    fn load_assets() -> (Option<render::TileAtlas>, Option<render::SpriteAtlas>, Option<Vec<u8>>) {
         let assets_dir = PathBuf::from("assets");
 
         let pool = match archive::AssetPool::load(&assets_dir) {
@@ -70,7 +69,7 @@ impl EditorApp {
                     assets_dir.display(),
                     e
                 );
-                return (None, None);
+                return (None, None, None);
             }
         };
 
@@ -78,14 +77,14 @@ impl EditorApp {
             Some(data) => data,
             None => {
                 warn!("legend.pal not found in asset archives");
-                return (None, None);
+                return (None, None, None);
             }
         };
         let palette = match render::Palette::from_bytes(pal_data) {
             Ok(p) => p,
             Err(e) => {
                 warn!("Failed to parse palette: {}", e);
-                return (None, None);
+                return (None, None, None);
             }
         };
 
@@ -116,7 +115,19 @@ impl EditorApp {
         // Wall sprite atlas from HPF files
         let wall_atlas = Self::load_wall_atlas(&pool, &palette);
 
-        (tile_atlas, wall_atlas)
+        // SOTP collision data
+        let sotp_data = pool
+            .get("SOTP.DAT")
+            .or_else(|| pool.get("sotp.dat"))
+            .map(|data| {
+                info!("Loaded SOTP.DAT ({} bytes)", data.len());
+                data.to_vec()
+            });
+        if sotp_data.is_none() {
+            warn!("SOTP.DAT not found in asset archives");
+        }
+
+        (tile_atlas, wall_atlas, sotp_data)
     }
 
     /// Probe for `stcNNNNN.hpf` files in the asset pool, decode them, and
@@ -333,20 +344,10 @@ impl EditorApp {
                 let cmd = i.modifiers.command;
                 let shift = i.modifiers.shift;
 
-                // Tool shortcuts (no modifiers)
+                // Tool shortcuts (no modifiers) — only Select is enabled for now
                 let tool = if !cmd && !shift {
                     if i.key_pressed(egui::Key::V) {
                         Some(Tool::Select)
-                    } else if i.key_pressed(egui::Key::B) {
-                        Some(Tool::Pencil)
-                    } else if i.key_pressed(egui::Key::E) {
-                        Some(Tool::Eraser)
-                    } else if i.key_pressed(egui::Key::G) {
-                        Some(Tool::Fill)
-                    } else if i.key_pressed(egui::Key::I) {
-                        Some(Tool::Eyedropper)
-                    } else if i.key_pressed(egui::Key::R) {
-                        Some(Tool::Rectangle)
                     } else {
                         None
                     }
@@ -390,8 +391,8 @@ impl EditorApp {
                 (
                     cmd && i.key_pressed(egui::Key::N),
                     cmd && i.key_pressed(egui::Key::O),
-                    cmd && !shift && i.key_pressed(egui::Key::S),
-                    cmd && shift && i.key_pressed(egui::Key::S),
+                    false, // Save disabled for now
+                    false, // Save As disabled for now
                     cmd && i.key_pressed(egui::Key::W),
                     cmd && i.key_pressed(egui::Key::E),
                     tool,
@@ -509,7 +510,6 @@ impl eframe::App for EditorApp {
 
         let tab_action = self.tab_bar.show(ctx, &self.documents, self.active_tab);
         match tab_action {
-            TabBarAction::NewTab => self.new_document(),
             TabBarAction::CloseTab(i) => self.close_tab(i),
             TabBarAction::SwitchTab(i) => {
                 self.active_tab = i;
@@ -539,7 +539,6 @@ impl eframe::App for EditorApp {
         match toolbar_action {
             ToolbarAction::NewFile => self.new_document(),
             ToolbarAction::OpenFile => self.open_document(),
-            ToolbarAction::SaveFile => self.save_document(),
             ToolbarAction::Export => {
                 let doc_name = self.documents[self.active_tab].display_name();
                 self.export_dialog.open_for(&doc_name);
@@ -570,19 +569,11 @@ impl eframe::App for EditorApp {
             }
         }
 
-        // Build selection info for the inspector
-        let selection_info = self.selected_tile.and_then(|(col, row)| {
+        // Inspector: tileset + tab map
+        {
             let doc = &self.documents[self.active_tab];
-            let idx = row as usize * doc.map.width as usize + col as usize;
-            doc.map.tiles.get(idx).map(|tile| SelectedTileInfo {
-                col,
-                row,
-                ground: tile.ground,
-                left_wall: tile.left_wall,
-                right_wall: tile.right_wall,
-            })
-        });
-        self.inspector.show(ctx, selection_info.as_ref());
+            InspectorPanel::show(ctx, &doc.map, self.sotp_data.as_deref());
+        }
 
         // Viewport needs mutable access to camera for panning
         let doc = &mut self.documents[self.active_tab];

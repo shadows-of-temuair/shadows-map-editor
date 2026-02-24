@@ -114,26 +114,14 @@ pub fn draw_icon_select(painter: &egui::Painter, rect: egui::Rect, color: egui::
     let s = rect.width().min(rect.height()) * 0.32;
     let stroke = egui::Stroke::new(1.5, color);
 
-    // Classic pointer: tip top-left, left edge straight down, right edge
-    // at an angle. Bottom has a notch where the tail extends to lower-right.
-    //
-    //      tip
-    //      |\
-    //      | \
-    //      |  \ right_wing
-    //      |  /
-    //      | / notch
-    //      |/  \
-    //  left_bot  \ tail_bot
-    //             |
-    //           tail_top
-    //
-    let tip = egui::pos2(c.x - s * 0.6, c.y - s);
-    let left_bot = egui::pos2(c.x - s * 0.6, c.y + s * 0.6);
-    let notch = egui::pos2(c.x - s * 0.15, c.y + s * 0.2);
+    // Classic pointer cursor. The right edge is a clean diagonal from
+    // tip to right_wing, then the tail branches off below right_wing.
+    let tip = egui::pos2(c.x - s * 0.55, c.y - s);
+    let left_bot = egui::pos2(c.x - s * 0.55, c.y + s * 0.65);
+    let notch = egui::pos2(c.x - s * 0.15, c.y + s * 0.25);
     let tail_bot = egui::pos2(c.x + s * 0.45, c.y + s);
-    let tail_top = egui::pos2(c.x + s * 0.1, c.y + s * 0.5);
-    let right_wing = egui::pos2(c.x + s * 0.35, c.y - s * 0.25);
+    let tail_top = egui::pos2(c.x + s * 0.1, c.y + s * 0.55);
+    let right_wing = egui::pos2(c.x + s * 0.18, c.y - s * 0.15);
 
     painter.line_segment([tip, left_bot], stroke);
     painter.line_segment([left_bot, notch], stroke);

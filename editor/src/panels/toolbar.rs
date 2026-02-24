@@ -11,7 +11,6 @@ pub enum ToolbarAction {
     None,
     NewFile,
     OpenFile,
-    SaveFile,
     Export,
 }
 
@@ -26,15 +25,6 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: &[Tool] = &[
-        Tool::Select,
-        Tool::Pencil,
-        Tool::Eraser,
-        Tool::Fill,
-        Tool::Eyedropper,
-        Tool::Rectangle,
-    ];
-
     pub fn tooltip(self) -> &'static str {
         match self {
             Tool::Select => "Select (V)",

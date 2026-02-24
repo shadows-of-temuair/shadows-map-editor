@@ -8,7 +8,6 @@ const NAV_BUTTON_WIDTH: f32 = 24.0;
 
 pub enum TabBarAction {
     None,
-    NewTab,
     CloseTab(usize),
     SwitchTab(usize),
 }
@@ -47,7 +46,6 @@ impl TabBarPanel {
                     ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
 
                     let available_width = ui.available_width();
-                    let plus_button_width = TAB_BAR_HEIGHT;
 
                     // Measure total tab width
                     let total_tabs_width: f32 = documents
@@ -56,12 +54,11 @@ impl TabBarPanel {
                         .map(|(i, doc)| Self::measure_tab_width(ui, doc, i == active_tab))
                         .sum();
 
-                    let needs_scroll =
-                        total_tabs_width > available_width - plus_button_width;
+                    let needs_scroll = total_tabs_width > available_width;
                     let tabs_area_width = if needs_scroll {
-                        available_width - plus_button_width - NAV_BUTTON_WIDTH * 2.0
+                        available_width - NAV_BUTTON_WIDTH * 2.0
                     } else {
-                        available_width - plus_button_width
+                        available_width
                     };
 
                     // Left scroll button
@@ -113,28 +110,6 @@ impl TabBarPanel {
                         }
                     }
 
-                    // + button (always visible at the end)
-                    let (plus_rect, plus_response) = ui.allocate_exact_size(
-                        egui::vec2(plus_button_width, TAB_BAR_HEIGHT),
-                        egui::Sense::click(),
-                    );
-                    let plus_bg = if plus_response.hovered() {
-                        colors.bg_3
-                    } else {
-                        egui::Color32::TRANSPARENT
-                    };
-                    ui.painter().rect_filled(plus_rect, 0.0, plus_bg);
-                    ui.painter().text(
-                        plus_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "+",
-                        egui::FontId::proportional(14.0),
-                        colors.muted,
-                    );
-                    if plus_response.clicked() {
-                        action = TabBarAction::NewTab;
-                    }
-                    plus_response.on_hover_text("New map (Cmd+N)");
                 });
             });
 
