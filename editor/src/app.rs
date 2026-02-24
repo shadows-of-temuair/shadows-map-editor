@@ -553,9 +553,15 @@ impl eframe::App for EditorApp {
                 self.export_dialog
                     .show(ctx, &doc.map, self.wall_atlas.as_ref());
             match export_action {
-                ExportDialogAction::Export { path, zoom } => {
+                ExportDialogAction::Export {
+                    path,
+                    zoom,
+                    bg_color,
+                    tab_map,
+                } => {
                     if let (Some(ta), Some(wa)) = (&self.tile_atlas, &self.wall_atlas) {
-                        if let Err(e) = crate::export::export_map_png(&path, &doc.map, ta, wa, zoom)
+                        if let Err(e) =
+                            crate::export::export_map_png(&path, &doc.map, ta, wa, zoom, bg_color)
                         {
                             warn!("Export failed: {}", e);
                         } else {
@@ -563,6 +569,25 @@ impl eframe::App for EditorApp {
                         }
                     } else {
                         warn!("Cannot export: atlases not loaded");
+                    }
+                    // Export tab map alongside if enabled
+                    if let Some(tm) = tab_map {
+                        if let Some(sotp) = &self.sotp_data {
+                            let tm_path = crate::export::tab_map_path(&path);
+                            if let Err(e) = crate::export::export_tab_map_png(
+                                &tm_path,
+                                &doc.map,
+                                sotp,
+                                tm.zoom,
+                                tm.bg_color,
+                            ) {
+                                warn!("Tab map export failed: {}", e);
+                            } else {
+                                info!("Exported tab map to {}", tm_path.display());
+                            }
+                        } else {
+                            warn!("Cannot export tab map: SOTP data not loaded");
+                        }
                     }
                 }
                 ExportDialogAction::None => {}

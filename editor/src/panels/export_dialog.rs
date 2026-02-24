@@ -8,11 +8,27 @@ pub struct ExportDialog {
     open: bool,
     filename: String,
     scale_percent: u32,
+    bg_enabled: bool,
+    bg_color: [u8; 3],
+    tab_map_enabled: bool,
+    tab_map_scale_percent: u32,
+    tab_map_bg_enabled: bool,
+    tab_map_bg_color: [u8; 3],
 }
 
 pub enum ExportDialogAction {
     None,
-    Export { path: PathBuf, zoom: f32 },
+    Export {
+        path: PathBuf,
+        zoom: f32,
+        bg_color: Option<[u8; 4]>,
+        tab_map: Option<TabMapExport>,
+    },
+}
+
+pub struct TabMapExport {
+    pub zoom: f32,
+    pub bg_color: Option<[u8; 4]>,
 }
 
 impl Default for ExportDialog {
@@ -21,6 +37,12 @@ impl Default for ExportDialog {
             open: false,
             filename: String::new(),
             scale_percent: 100,
+            bg_enabled: false,
+            bg_color: [11, 12, 14],
+            tab_map_enabled: false,
+            tab_map_scale_percent: 100,
+            tab_map_bg_enabled: false,
+            tab_map_bg_color: [11, 12, 14],
         }
     }
 }
@@ -29,7 +51,6 @@ impl ExportDialog {
     /// Open the dialog, pre-filling the filename from the document name.
     pub fn open_for(&mut self, document_name: &str) {
         self.open = true;
-        // Strip .map extension (case-insensitive) then add .png
         let base = document_name
             .strip_suffix(".map")
             .or_else(|| document_name.strip_suffix(".MAP"))
@@ -152,7 +173,27 @@ impl ExportDialog {
                     );
                 });
 
-                ui.add_space(4.0);
+                // Background color
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+                    ui.add(egui::Checkbox::without_text(&mut self.bg_enabled));
+                    ui.label(
+                        egui::RichText::new("Background")
+                            .size(13.0)
+                            .color(if self.bg_enabled { colors.text } else { colors.muted }),
+                    );
+                    if self.bg_enabled {
+                        let mut c = egui::Color32::from_rgb(
+                            self.bg_color[0],
+                            self.bg_color[1],
+                            self.bg_color[2],
+                        );
+                        ui.color_edit_button_srgba(&mut c);
+                        self.bg_color = [c.r(), c.g(), c.b()];
+                    }
+                });
+
+                ui.add_space(2.0);
 
                 // Output dimensions
                 let zoom = self.scale_percent as f32 / 100.0;
@@ -164,14 +205,104 @@ impl ExportDialog {
                         .color(colors.muted),
                 );
 
-                ui.add_space(8.0);
+                ui.add_space(4.0);
 
-                // Separator
+                // --- Tab Map section ---
                 let (sep_rect, _) = ui.allocate_exact_size(
                     egui::vec2(ui.available_width(), 1.0),
                     egui::Sense::hover(),
                 );
                 ui.painter().rect_filled(sep_rect, 0.0, colors.border);
+                ui.add_space(4.0);
+
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+                    ui.add(egui::Checkbox::without_text(&mut self.tab_map_enabled));
+                    ui.label(
+                        egui::RichText::new("Export Tab Map")
+                            .size(14.0)
+                            .color(if self.tab_map_enabled {
+                                colors.text
+                            } else {
+                                colors.muted
+                            }),
+                    );
+                });
+
+                if self.tab_map_enabled {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+                        ui.add_space(24.0);
+                        ui.label(
+                            egui::RichText::new("Scale")
+                                .size(13.0)
+                                .color(colors.muted),
+                        );
+                        let mut tm_slot = (self.tab_map_scale_percent / 25) as i32;
+                        let slider_w = ui.available_width() - 50.0;
+                        let slider = egui::Slider::new(&mut tm_slot, 1..=16)
+                            .show_value(false)
+                            .trailing_fill(true);
+                        ui.add_sized(egui::vec2(slider_w, 20.0), slider);
+                        self.tab_map_scale_percent = (tm_slot as u32) * 25;
+                        ui.label(
+                            egui::RichText::new(format!("{}%", self.tab_map_scale_percent))
+                                .size(14.0)
+                                .strong()
+                                .color(colors.text),
+                        );
+                    });
+
+                    // Tab map background color
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+                        ui.add_space(24.0);
+                        ui.add(egui::Checkbox::without_text(&mut self.tab_map_bg_enabled));
+                        ui.label(
+                            egui::RichText::new("Background")
+                                .size(13.0)
+                                .color(if self.tab_map_bg_enabled {
+                                    colors.text
+                                } else {
+                                    colors.muted
+                                }),
+                        );
+                        if self.tab_map_bg_enabled {
+                            let mut c = egui::Color32::from_rgb(
+                                self.tab_map_bg_color[0],
+                                self.tab_map_bg_color[1],
+                                self.tab_map_bg_color[2],
+                            );
+                            ui.color_edit_button_srgba(&mut c);
+                            self.tab_map_bg_color = [c.r(), c.g(), c.b()];
+                        }
+                    });
+
+                    // Tab map output dimensions
+                    let tm_zoom = self.tab_map_scale_percent as f32 / 100.0;
+                    let (tm_w, tm_h) =
+                        crate::export::compute_tab_map_dimensions(map, tm_zoom);
+                    ui.horizontal(|ui| {
+                        ui.add_space(24.0);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Tab map size: {} \u{00D7} {} px",
+                                tm_w, tm_h
+                            ))
+                            .size(13.0)
+                            .color(colors.muted),
+                        );
+                    });
+                }
+
+                ui.add_space(4.0);
+
+                // Separator
+                let (sep_rect2, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 1.0),
+                    egui::Sense::hover(),
+                );
+                ui.painter().rect_filled(sep_rect2, 0.0, colors.border);
 
                 ui.add_space(4.0);
 
@@ -180,7 +311,6 @@ impl ExportDialog {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
 
-                        // Export (primary action)
                         let export_btn = ui.add(
                             egui::Button::new(
                                 egui::RichText::new("  Export  ")
@@ -195,11 +325,38 @@ impl ExportDialog {
                         if export_btn.clicked() && !self.filename.is_empty() {
                             let path = PathBuf::from(&self.filename);
                             let zoom = self.scale_percent as f32 / 100.0;
-                            action = ExportDialogAction::Export { path, zoom };
+                            let bg_color = if self.bg_enabled {
+                                Some([self.bg_color[0], self.bg_color[1], self.bg_color[2], 255])
+                            } else {
+                                None
+                            };
+                            let tab_map = if self.tab_map_enabled {
+                                let tm_bg = if self.tab_map_bg_enabled {
+                                    Some([
+                                        self.tab_map_bg_color[0],
+                                        self.tab_map_bg_color[1],
+                                        self.tab_map_bg_color[2],
+                                        255,
+                                    ])
+                                } else {
+                                    None
+                                };
+                                Some(TabMapExport {
+                                    zoom: self.tab_map_scale_percent as f32 / 100.0,
+                                    bg_color: tm_bg,
+                                })
+                            } else {
+                                None
+                            };
+                            action = ExportDialogAction::Export {
+                                path,
+                                zoom,
+                                bg_color,
+                                tab_map,
+                            };
                             self.open = false;
                         }
 
-                        // Cancel (secondary)
                         let cancel_btn = ui.add(
                             egui::Button::new(
                                 egui::RichText::new("Cancel")
