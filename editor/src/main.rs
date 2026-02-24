@@ -5,6 +5,7 @@
 
 mod app;
 mod document;
+pub mod export;
 mod panels;
 mod theme;
 mod widgets;

@@ -76,22 +76,16 @@ impl StatusBarPanel {
 
                         Self::separator(ui, &colors);
 
-                        // Dimensions dropdown: button first (rightward in RTL), then "Size" label
-                        let dim_text = format!("{}x{}", map.width, map.height);
-                        let dim_response = ui.add(
-                            egui::Button::new(
-                                egui::RichText::new(&dim_text).size(13.0).color(colors.text),
-                            )
-                            .fill(egui::Color32::TRANSPARENT)
-                            .stroke(egui::Stroke::NONE)
-                            .corner_radius(0.0),
+                        // Dimensions dropdown — "caret | NxN | Size" (RTL order)
+                        // Caret triangle (allocated in RTL flow, appears rightmost)
+                        let (caret_rect, _) = ui.allocate_exact_size(
+                            egui::vec2(14.0, 14.0),
+                            egui::Sense::hover(),
                         );
-                        // Paint a small caret triangle next to the button
                         {
-                            let r = dim_response.rect;
-                            let cx = r.right() + 4.0;
-                            let cy = r.center().y;
-                            let s = 3.0;
+                            let cx = caret_rect.center().x;
+                            let cy = caret_rect.center().y;
+                            let s = 4.5;
                             ui.painter().add(egui::Shape::convex_polygon(
                                 vec![
                                     egui::pos2(cx - s, cy - s * 0.5),
@@ -102,14 +96,25 @@ impl StatusBarPanel {
                                 egui::Stroke::NONE,
                             ));
                         }
+                        let dim_text = format!("{}x{}", map.width, map.height);
+                        let dim_response = ui.add(
+                            egui::Button::new(
+                                egui::RichText::new(&dim_text).size(13.0).color(colors.text),
+                            )
+                            .fill(egui::Color32::TRANSPARENT)
+                            .stroke(egui::Stroke::NONE)
+                            .corner_radius(0.0),
+                        );
                         ui.label(
                             egui::RichText::new("Size").size(13.0).color(colors.muted),
                         );
 
+                        let popup_width = dim_response.rect.width().max(120.0);
                         egui::Popup::from_toggle_button_response(&dim_response)
                             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                            .width(100.0)
+                            .width(popup_width)
                             .show(|ui| {
+                                ui.spacing_mut().item_spacing = egui::vec2(0.0, 2.0);
                                 let tile_count = map.tiles.len();
                                 let dims = map::all_dimensions(tile_count);
                                 egui::ScrollArea::vertical()
@@ -124,22 +129,29 @@ impl StatusBarPanel {
                                             } else {
                                                 colors.text
                                             };
-                                            if ui
-                                                .add(
-                                                    egui::Button::new(
-                                                        egui::RichText::new(&label)
-                                                            .size(13.0)
-                                                            .color(text_color),
-                                                    )
-                                                    .fill(egui::Color32::TRANSPARENT)
-                                                    .stroke(egui::Stroke::NONE)
-                                                    .min_size(egui::vec2(
-                                                        ui.available_width(),
-                                                        0.0,
-                                                    )),
+                                            let btn = ui.add(
+                                                egui::Button::new(
+                                                    egui::RichText::new(&label)
+                                                        .size(13.0)
+                                                        .color(text_color),
                                                 )
-                                                .clicked()
-                                            {
+                                                .fill(egui::Color32::TRANSPARENT)
+                                                .stroke(egui::Stroke::NONE)
+                                                .min_size(egui::vec2(
+                                                    ui.available_width(),
+                                                    24.0,
+                                                ))
+                                                .corner_radius(4.0),
+                                            );
+                                            // Hover highlight
+                                            if btn.hovered() {
+                                                ui.painter().rect_filled(
+                                                    btn.rect,
+                                                    4.0,
+                                                    colors.bg_3,
+                                                );
+                                            }
+                                            if btn.clicked() {
                                                 action =
                                                     StatusBarAction::SetDimensions(w, h);
                                                 egui::Popup::close_id(

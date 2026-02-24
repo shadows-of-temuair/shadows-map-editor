@@ -12,6 +12,7 @@ archive = { path = "../archive" }
 map = { path = "../map" }
 render = { path = "../render" }
 eframe = "0.33"
+png = "0.18"
 rfd = "0.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

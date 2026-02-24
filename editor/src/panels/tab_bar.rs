@@ -4,6 +4,7 @@ use crate::document::MapDocument;
 use crate::theme::{ThemeColors, theme_colors};
 
 const TAB_BAR_HEIGHT: f32 = 32.0;
+const NAV_BUTTON_WIDTH: f32 = 24.0;
 
 pub enum TabBarAction {
     None,
@@ -12,10 +13,25 @@ pub enum TabBarAction {
     SwitchTab(usize),
 }
 
-pub struct TabBarPanel;
+pub struct TabBarPanel {
+    scroll_offset: f32,
+}
+
+impl Default for TabBarPanel {
+    fn default() -> Self {
+        Self {
+            scroll_offset: 0.0,
+        }
+    }
+}
 
 impl TabBarPanel {
-    pub fn show(ctx: &egui::Context, documents: &[MapDocument], active_tab: usize) -> TabBarAction {
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        documents: &[MapDocument],
+        active_tab: usize,
+    ) -> TabBarAction {
         let colors = theme_colors();
         let mut action = TabBarAction::None;
 
@@ -30,17 +46,76 @@ impl TabBarPanel {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
 
-                    for (i, doc) in documents.iter().enumerate() {
-                        let is_active = i == active_tab;
-                        let tab_action = Self::tab_button(ui, doc, i, is_active, &colors);
-                        if !matches!(tab_action, TabBarAction::None) {
-                            action = tab_action;
+                    let available_width = ui.available_width();
+                    let plus_button_width = TAB_BAR_HEIGHT;
+
+                    // Measure total tab width
+                    let total_tabs_width: f32 = documents
+                        .iter()
+                        .enumerate()
+                        .map(|(i, doc)| Self::measure_tab_width(ui, doc, i == active_tab))
+                        .sum();
+
+                    let needs_scroll =
+                        total_tabs_width > available_width - plus_button_width;
+                    let tabs_area_width = if needs_scroll {
+                        available_width - plus_button_width - NAV_BUTTON_WIDTH * 2.0
+                    } else {
+                        available_width - plus_button_width
+                    };
+
+                    // Left scroll button
+                    if needs_scroll {
+                        let can_scroll_left = self.scroll_offset > 0.0;
+                        if Self::nav_button(ui, "<", can_scroll_left, &colors) {
+                            self.scroll_offset = (self.scroll_offset - 120.0).max(0.0);
                         }
                     }
 
-                    // + button (flat, square)
+                    // Clipped tab area
+                    let (clip_rect, _) = ui.allocate_exact_size(
+                        egui::vec2(tabs_area_width, TAB_BAR_HEIGHT),
+                        egui::Sense::hover(),
+                    );
+
+                    // Render tabs in a clipped child UI
+                    let inner_width = total_tabs_width.max(tabs_area_width);
+                    let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(
+                        egui::Rect::from_min_size(
+                            egui::pos2(clip_rect.left() - self.scroll_offset, clip_rect.top()),
+                            egui::vec2(inner_width, TAB_BAR_HEIGHT),
+                        ),
+                    ));
+                    child_ui.set_clip_rect(clip_rect);
+                    child_ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+
+                    child_ui.horizontal_centered(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+                        for (i, doc) in documents.iter().enumerate() {
+                            let is_active = i == active_tab;
+                            let tab_action =
+                                Self::tab_button(ui, doc, i, is_active, &colors);
+                            if !matches!(tab_action, TabBarAction::None) {
+                                action = tab_action;
+                            }
+                        }
+                    });
+
+                    // Right scroll button
+                    if needs_scroll {
+                        let max_scroll = (total_tabs_width - tabs_area_width).max(0.0);
+                        self.scroll_offset = self.scroll_offset.min(max_scroll);
+                        let can_scroll_right = self.scroll_offset < max_scroll;
+                        if Self::nav_button(ui, ">", can_scroll_right, &colors) {
+                            let max_s = (total_tabs_width - tabs_area_width).max(0.0);
+                            self.scroll_offset =
+                                (self.scroll_offset + 120.0).min(max_s);
+                        }
+                    }
+
+                    // + button (always visible at the end)
                     let (plus_rect, plus_response) = ui.allocate_exact_size(
-                        egui::vec2(TAB_BAR_HEIGHT, TAB_BAR_HEIGHT),
+                        egui::vec2(plus_button_width, TAB_BAR_HEIGHT),
                         egui::Sense::click(),
                     );
                     let plus_bg = if plus_response.hovered() {
@@ -64,6 +139,96 @@ impl TabBarPanel {
             });
 
         action
+    }
+
+    /// Ensure the active tab is within the visible scroll window.
+    pub fn ensure_tab_visible(&mut self, documents: &[MapDocument], active_tab: usize) {
+        // We need a rough measure of tab widths without a UI context.
+        // Use the same estimation formula as measure_tab_width but with a fixed
+        // approximate character width since we don't have a painter here.
+        let mut offset = 0.0f32;
+        for (i, doc) in documents.iter().enumerate() {
+            let w = Self::estimate_tab_width(doc, i == active_tab);
+            if i == active_tab {
+                // Just ensure scroll_offset isn't past this tab
+                if offset < self.scroll_offset {
+                    self.scroll_offset = offset;
+                }
+                // We don't know the exact tabs_area_width here, so use a reasonable default
+                break;
+            }
+            offset += w;
+        }
+    }
+
+    /// Measure the width a tab would occupy.
+    fn measure_tab_width(ui: &egui::Ui, doc: &MapDocument, is_active: bool) -> f32 {
+        let name = doc.display_name();
+        let label = if doc.dirty {
+            format!("{name} *")
+        } else {
+            name
+        };
+
+        let text_color = if is_active {
+            egui::Color32::WHITE
+        } else {
+            egui::Color32::GRAY
+        };
+
+        let font = egui::FontId::proportional(13.0);
+        let close_width: f32 = 20.0;
+        let h_pad: f32 = 12.0;
+        let galley = ui.painter().layout_no_wrap(label, font, text_color);
+        let text_width = galley.size().x;
+        h_pad + text_width + 6.0 + close_width + 6.0
+    }
+
+    /// Rough tab width estimate without painter access (for ensure_tab_visible).
+    fn estimate_tab_width(doc: &MapDocument, _is_active: bool) -> f32 {
+        let name = doc.display_name();
+        let chars = if doc.dirty { name.len() + 2 } else { name.len() };
+        let close_width: f32 = 20.0;
+        let h_pad: f32 = 12.0;
+        let approx_char_width = 7.5;
+        h_pad + chars as f32 * approx_char_width + 6.0 + close_width + 6.0
+    }
+
+    fn nav_button(
+        ui: &mut egui::Ui,
+        label: &str,
+        enabled: bool,
+        colors: &ThemeColors,
+    ) -> bool {
+        let size = egui::vec2(NAV_BUTTON_WIDTH, TAB_BAR_HEIGHT);
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+        let painter = ui.painter();
+
+        let bg = if response.hovered() && enabled {
+            colors.bg_3
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        painter.rect_filled(rect, 0.0, bg);
+
+        let text_color = if enabled {
+            if response.hovered() {
+                colors.text
+            } else {
+                colors.muted
+            }
+        } else {
+            colors.border
+        };
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::FontId::proportional(14.0),
+            text_color,
+        );
+
+        enabled && response.clicked()
     }
 
     fn tab_button(

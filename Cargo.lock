@@ -864,6 +864,7 @@ dependencies = [
  "archive",
  "eframe",
  "map",
+ "png",
  "render",
  "rfd",
  "tracing",

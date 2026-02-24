@@ -192,6 +192,16 @@ impl SpriteAtlas {
         ))
     }
 
+    /// Returns the pixel rect `(x, y, width, height)` for a sprite in the atlas,
+    /// or `None` if the index is out of range or the slot is empty.
+    pub fn sprite_rect(&self, index: u32) -> Option<(u32, u32, u32, u32)> {
+        let entry = self.entries.get(index as usize)?.as_ref()?;
+        if entry.height == 0 {
+            return None;
+        }
+        Some((entry.x, entry.y, entry.width, entry.height))
+    }
+
     /// Returns the original pixel height of a sprite, or 0 if the slot is
     /// empty or out of range.
     pub fn sprite_height(&self, index: u32) -> u32 {

@@ -5,8 +5,9 @@ use tracing::{info, warn};
 
 use crate::document::{LayerVisibility, MapDocument};
 use crate::panels::{
-    InspectorPanel, SelectedTileInfo, StatusBarAction, StatusBarPanel, TabBarAction, TabBarPanel,
-    TitleBarPanel, Tool, ToolbarAction, ToolbarPanel, ViewportPanel,
+    ExportDialog, ExportDialogAction, InspectorPanel, SelectedTileInfo, StatusBarAction,
+    StatusBarPanel, TabBarAction, TabBarPanel, TitleBarPanel, Tool, ToolbarAction, ToolbarPanel,
+    ViewportPanel,
 };
 use crate::theme;
 
@@ -15,6 +16,7 @@ pub struct EditorApp {
     active_tab: usize,
     active_tool: Tool,
     inspector: InspectorPanel,
+    tab_bar: TabBarPanel,
     layer_visibility: LayerVisibility,
     show_grid: bool,
     tile_atlas: Option<render::TileAtlas>,
@@ -23,6 +25,7 @@ pub struct EditorApp {
     wall_texture: Option<egui::TextureHandle>,
     hover_tile: (u16, u16),
     selected_tile: Option<(u16, u16)>,
+    export_dialog: ExportDialog,
     atlas_needs_upload: bool,
     wall_atlas_needs_upload: bool,
 }
@@ -38,8 +41,9 @@ impl EditorApp {
         Self {
             documents: vec![MapDocument::new(50, 50)],
             active_tab: 0,
-            active_tool: Tool::Pencil,
+            active_tool: Tool::Select,
             inspector: InspectorPanel::default(),
+            tab_bar: TabBarPanel::default(),
             layer_visibility: LayerVisibility::default(),
             show_grid: true,
             atlas_needs_upload: tile_atlas.is_some(),
@@ -50,6 +54,7 @@ impl EditorApp {
             wall_texture: None,
             hover_tile: (0, 0),
             selected_tile: None,
+            export_dialog: ExportDialog::default(),
         }
     }
 
@@ -323,7 +328,7 @@ impl EditorApp {
     }
 
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
-        let (new, open, save, save_as, close, tool, toggle_layer, keyboard_zoom, reset_zoom) =
+        let (new, open, save, save_as, close, export, tool, toggle_layer, keyboard_zoom, reset_zoom) =
             ctx.input(|i| {
                 let cmd = i.modifiers.command;
                 let shift = i.modifiers.shift;
@@ -388,6 +393,7 @@ impl EditorApp {
                     cmd && !shift && i.key_pressed(egui::Key::S),
                     cmd && shift && i.key_pressed(egui::Key::S),
                     cmd && i.key_pressed(egui::Key::W),
+                    cmd && i.key_pressed(egui::Key::E),
                     tool,
                     toggle_layer,
                     keyboard_zoom,
@@ -432,6 +438,41 @@ impl EditorApp {
         } else if save {
             self.save_document();
         }
+        if export {
+            let doc_name = self.documents[self.active_tab].display_name();
+            self.export_dialog.open_for(&doc_name);
+        }
+    }
+
+    /// Handle files dropped onto the window from the OS.
+    fn handle_dropped_files(&mut self, ctx: &egui::Context) {
+        let dropped: Vec<_> = ctx.input(|i| i.raw.dropped_files.clone());
+        for file in dropped {
+            if let Some(path) = file.path {
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                if !ext.eq_ignore_ascii_case("map") {
+                    continue;
+                }
+                // Check if already open — just switch to it
+                let already_open = self.documents.iter().position(|doc| {
+                    doc.path.as_ref() == Some(&path)
+                });
+                if let Some(i) = already_open {
+                    self.active_tab = i;
+                    continue;
+                }
+                match MapDocument::open(path.clone()) {
+                    Ok(doc) => {
+                        self.documents.push(doc);
+                        self.active_tab = self.documents.len() - 1;
+                        info!("Opened dropped map: {}", path.display());
+                    }
+                    Err(e) => {
+                        warn!("Failed to open dropped file {}: {}", path.display(), e);
+                    }
+                }
+            }
+        }
     }
 
     /// Snap zoom to the nearest 25% boundary in the given direction.
@@ -462,14 +503,18 @@ impl eframe::App for EditorApp {
         self.try_upload_wall_atlas(ctx);
 
         self.handle_keyboard_shortcuts(ctx);
+        self.handle_dropped_files(ctx);
 
         TitleBarPanel::show(ctx, frame);
 
-        let tab_action = TabBarPanel::show(ctx, &self.documents, self.active_tab);
+        let tab_action = self.tab_bar.show(ctx, &self.documents, self.active_tab);
         match tab_action {
             TabBarAction::NewTab => self.new_document(),
             TabBarAction::CloseTab(i) => self.close_tab(i),
-            TabBarAction::SwitchTab(i) => self.active_tab = i,
+            TabBarAction::SwitchTab(i) => {
+                self.active_tab = i;
+                self.tab_bar.ensure_tab_visible(&self.documents, i);
+            }
             TabBarAction::None => {}
         }
 
@@ -495,7 +540,34 @@ impl eframe::App for EditorApp {
             ToolbarAction::NewFile => self.new_document(),
             ToolbarAction::OpenFile => self.open_document(),
             ToolbarAction::SaveFile => self.save_document(),
+            ToolbarAction::Export => {
+                let doc_name = self.documents[self.active_tab].display_name();
+                self.export_dialog.open_for(&doc_name);
+            }
             ToolbarAction::None => {}
+        }
+
+        // Export dialog
+        {
+            let doc = &self.documents[self.active_tab];
+            let export_action =
+                self.export_dialog
+                    .show(ctx, &doc.map, self.wall_atlas.as_ref());
+            match export_action {
+                ExportDialogAction::Export { path, zoom } => {
+                    if let (Some(ta), Some(wa)) = (&self.tile_atlas, &self.wall_atlas) {
+                        if let Err(e) = crate::export::export_map_png(&path, &doc.map, ta, wa, zoom)
+                        {
+                            warn!("Export failed: {}", e);
+                        } else {
+                            info!("Exported to {}", path.display());
+                        }
+                    } else {
+                        warn!("Cannot export: atlases not loaded");
+                    }
+                }
+                ExportDialogAction::None => {}
+            }
         }
 
         // Build selection info for the inspector

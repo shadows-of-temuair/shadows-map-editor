@@ -1,6 +1,7 @@
 use eframe::egui;
 
 use crate::theme::{ThemeColors, theme_colors};
+use crate::widgets::icons;
 
 const TOOLBAR_WIDTH: f32 = 48.0;
 const TOOL_BUTTON_SIZE: f32 = 34.0;
@@ -11,6 +12,7 @@ pub enum ToolbarAction {
     NewFile,
     OpenFile,
     SaveFile,
+    Export,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -44,14 +46,14 @@ impl Tool {
         }
     }
 
-    pub fn icon_char(self) -> &'static str {
+    pub fn draw_icon(self, painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
         match self {
-            Tool::Select => "\u{25E3}",
-            Tool::Pencil => "\u{270E}",
-            Tool::Eraser => "\u{2395}",
-            Tool::Fill => "\u{25CF}",
-            Tool::Eyedropper => "\u{25C9}",
-            Tool::Rectangle => "\u{25A1}",
+            Tool::Select => icons::draw_icon_select(painter, rect, color),
+            Tool::Pencil => icons::draw_icon_pencil(painter, rect, color),
+            Tool::Eraser => icons::draw_icon_eraser(painter, rect, color),
+            Tool::Fill => icons::draw_icon_fill(painter, rect, color),
+            Tool::Eyedropper => icons::draw_icon_eyedropper(painter, rect, color),
+            Tool::Rectangle => icons::draw_icon_rectangle(painter, rect, color),
         }
     }
 }
@@ -103,19 +105,34 @@ impl ToolbarPanel {
             ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
 
             // --- File operation buttons ---
-            let file_ops: &[(&str, &str, ToolbarAction)] = &[
-                ("\u{2B9A}", "New (Cmd+N)", ToolbarAction::NewFile),
-                ("\u{21B3}", "Open (Cmd+O)", ToolbarAction::OpenFile),
-                ("\u{2193}", "Save (Cmd+S)", ToolbarAction::SaveFile),
+            let file_ops: &[(
+                fn(&egui::Painter, egui::Rect, egui::Color32),
+                &str,
+                ToolbarAction,
+            )] = &[
+                (icons::draw_icon_new, "New (Cmd+N)", ToolbarAction::NewFile),
+                (
+                    icons::draw_icon_open,
+                    "Open (Cmd+O)",
+                    ToolbarAction::OpenFile,
+                ),
             ];
 
-            for &(icon, tooltip, toolbar_action) in file_ops {
-                let response = Self::file_button(ui, icon, colors);
+            for &(draw_fn, tooltip, toolbar_action) in file_ops {
+                let response = Self::file_icon_button(ui, draw_fn, colors);
                 if response.clicked() {
                     *action = toolbar_action;
                 }
                 response.on_hover_text(tooltip);
             }
+
+            // Disabled file ops
+            Self::disabled_icon_button(ui, icons::draw_icon_save, "Save (coming soon)", colors);
+            let export_response = Self::file_icon_button(ui, icons::draw_icon_export, colors);
+            if export_response.clicked() {
+                *action = ToolbarAction::Export;
+            }
+            export_response.on_hover_text("Export as PNG (Cmd+E)");
 
             // --- Horizontal divider ---
             ui.add_space(2.0);
@@ -127,12 +144,16 @@ impl ToolbarPanel {
             ui.add_space(2.0);
 
             // --- Drawing tools ---
-            for &tool in Tool::ALL {
-                let is_active = *active_tool == tool;
-                let response = Self::tool_button(ui, tool, is_active, colors);
+            // Select is active; others are disabled placeholders for now
+            {
+                let is_active = *active_tool == Tool::Select;
+                let response = Self::tool_button(ui, Tool::Select, is_active, colors);
                 if response.clicked() {
-                    *active_tool = tool;
+                    *active_tool = Tool::Select;
                 }
+            }
+            for &tool in &[Tool::Pencil, Tool::Eraser, Tool::Fill, Tool::Eyedropper, Tool::Rectangle] {
+                Self::disabled_tool_button(ui, tool, colors);
             }
 
             // --- Divider ---
@@ -145,26 +166,49 @@ impl ToolbarPanel {
             ui.add_space(2.0);
 
             // --- Undo / Redo (placeholder, disabled) ---
-            Self::disabled_button(ui, "\u{21B6}", "Undo (Cmd+Z)", colors);
-            Self::disabled_button(ui, "\u{21B7}", "Redo (Cmd+Shift+Z)", colors);
+            Self::disabled_icon_button(
+                ui,
+                icons::draw_icon_undo,
+                "Undo (Cmd+Z)",
+                colors,
+            );
+            Self::disabled_icon_button(
+                ui,
+                icons::draw_icon_redo,
+                "Redo (Cmd+Shift+Z)",
+                colors,
+            );
         });
     }
 
-    fn disabled_button(ui: &mut egui::Ui, icon: &str, tooltip: &str, colors: &ThemeColors) {
+    fn disabled_icon_button(
+        ui: &mut egui::Ui,
+        draw_fn: fn(&egui::Painter, egui::Rect, egui::Color32),
+        tooltip: &str,
+        colors: &ThemeColors,
+    ) {
         let size = egui::vec2(TOOL_BUTTON_SIZE, TOOL_BUTTON_SIZE);
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
-        let dim = colors.border;
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            icon,
-            egui::FontId::proportional(16.0),
-            dim,
-        );
+        draw_fn(ui.painter(), rect, colors.border);
         response.on_hover_text(tooltip);
     }
 
-    fn file_button(ui: &mut egui::Ui, icon: &str, colors: &ThemeColors) -> egui::Response {
+    fn disabled_tool_button(
+        ui: &mut egui::Ui,
+        tool: Tool,
+        colors: &ThemeColors,
+    ) {
+        let size = egui::vec2(TOOL_BUTTON_SIZE, TOOL_BUTTON_SIZE);
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+        tool.draw_icon(ui.painter(), rect, colors.border);
+        response.on_hover_text(format!("{} (coming soon)", tool.tooltip()));
+    }
+
+    fn file_icon_button(
+        ui: &mut egui::Ui,
+        draw_fn: fn(&egui::Painter, egui::Rect, egui::Color32),
+        colors: &ThemeColors,
+    ) -> egui::Response {
         let size = egui::vec2(TOOL_BUTTON_SIZE, TOOL_BUTTON_SIZE);
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
         let painter = ui.painter();
@@ -183,19 +227,13 @@ impl ToolbarPanel {
 
         painter.rect(rect, 4.0, bg, border, egui::StrokeKind::Inside);
 
-        let text_color = if response.hovered() {
+        let icon_color = if response.hovered() {
             colors.text
         } else {
             colors.muted
         };
 
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            icon,
-            egui::FontId::proportional(16.0),
-            text_color,
-        );
+        draw_fn(painter, rect, icon_color);
 
         response
     }
@@ -228,7 +266,7 @@ impl ToolbarPanel {
 
         painter.rect(rect, 4.0, bg, border, egui::StrokeKind::Inside);
 
-        let text_color = if is_active {
+        let icon_color = if is_active {
             colors.accent
         } else if response.hovered() {
             colors.text
@@ -236,13 +274,7 @@ impl ToolbarPanel {
             colors.muted
         };
 
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            tool.icon_char(),
-            egui::FontId::proportional(16.0),
-            text_color,
-        );
+        tool.draw_icon(painter, rect, icon_color);
 
         response.on_hover_text(tool.tooltip())
     }
