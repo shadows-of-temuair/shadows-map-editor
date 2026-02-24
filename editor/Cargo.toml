@@ -16,3 +16,8 @@ png = "0.18"
 rfd = "0.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[build-dependencies]
+ico = "0.5"
+image = { version = "0.25", default-features = false, features = ["png"] }
+winresource = "0.1"
