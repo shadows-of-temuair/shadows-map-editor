@@ -19,17 +19,20 @@ pub struct EditorApp {
     show_grid: bool,
     tile_atlas: Option<render::TileAtlas>,
     atlas_texture: Option<egui::TextureHandle>,
+    wall_atlas: Option<render::SpriteAtlas>,
+    wall_texture: Option<egui::TextureHandle>,
     hover_tile: (u16, u16),
     atlas_needs_upload: bool,
+    wall_atlas_needs_upload: bool,
 }
 
 impl EditorApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply_theme(&cc.egui_ctx);
 
-        // Build atlas CPU-side; texture upload is deferred to first frame
+        // Build atlases CPU-side; texture uploads are deferred to first frame
         // because the renderer hasn't reported the real GPU max texture size yet.
-        let tile_atlas = Self::load_atlas_data();
+        let (tile_atlas, wall_atlas) = Self::load_assets();
 
         Self {
             documents: vec![MapDocument::new(50, 50)],
@@ -39,14 +42,17 @@ impl EditorApp {
             layer_visibility: LayerVisibility::default(),
             show_grid: true,
             atlas_needs_upload: tile_atlas.is_some(),
+            wall_atlas_needs_upload: wall_atlas.is_some(),
             tile_atlas,
+            wall_atlas,
             atlas_texture: None,
+            wall_texture: None,
             hover_tile: (0, 0),
         }
     }
 
-    /// Build the tile atlas from archive assets (CPU-side only, no GPU upload).
-    fn load_atlas_data() -> Option<render::TileAtlas> {
+    /// Load all assets from the archive: tile atlas and wall sprite atlas.
+    fn load_assets() -> (Option<render::TileAtlas>, Option<render::SpriteAtlas>) {
         let assets_dir = PathBuf::from("assets");
 
         let pool = match archive::AssetPool::load(&assets_dir) {
@@ -57,7 +63,7 @@ impl EditorApp {
                     assets_dir.display(),
                     e
                 );
-                return None;
+                return (None, None);
             }
         };
 
@@ -65,45 +71,122 @@ impl EditorApp {
             Some(data) => data,
             None => {
                 warn!("legend.pal not found in asset archives");
-                return None;
+                return (None, None);
             }
         };
         let palette = match render::Palette::from_bytes(pal_data) {
             Ok(p) => p,
             Err(e) => {
                 warn!("Failed to parse palette: {}", e);
-                return None;
+                return (None, None);
             }
         };
 
-        let tile_data = match pool.get("TILEA.BMP") {
-            Some(data) => data,
+        // Ground tile atlas
+        let tile_atlas = match pool.get("TILEA.BMP") {
+            Some(tile_data) => match render::TileAtlas::from_raw(tile_data, &palette, 56, 27) {
+                Ok(atlas) => {
+                    let (w, h) = atlas.dimensions();
+                    info!(
+                        "Built tile atlas: {}x{} ({} tiles)",
+                        w,
+                        h,
+                        atlas.tile_count()
+                    );
+                    Some(atlas)
+                }
+                Err(e) => {
+                    warn!("Failed to build tile atlas: {}", e);
+                    None
+                }
+            },
             None => {
                 warn!("TILEA.BMP not found in asset archives");
-                return None;
+                None
             }
         };
 
-        match render::TileAtlas::from_raw(tile_data, &palette, 56, 27) {
+        // Wall sprite atlas from HPF files
+        let wall_atlas = Self::load_wall_atlas(&pool, &palette);
+
+        (tile_atlas, wall_atlas)
+    }
+
+    /// Probe for `stcNNNNN.hpf` files in the asset pool, decode them, and
+    /// pack into a single sprite atlas.
+    fn load_wall_atlas(
+        pool: &archive::AssetPool,
+        palette: &render::Palette,
+    ) -> Option<render::SpriteAtlas> {
+        let mut sprites: Vec<Option<render::HpfSprite>> = Vec::new();
+        let mut last_found = 0u32;
+        let mut found_count = 0u32;
+
+        for id in 1..=99_999u32 {
+            // Try lowercase first, then uppercase (archive names may vary)
+            let name_lower = format!("stc{:05}.hpf", id);
+            let name_upper = format!("STC{:05}.HPF", id);
+            let data = pool.get(&name_lower).or_else(|| pool.get(&name_upper));
+
+            match data {
+                Some(bytes) => {
+                    match render::HpfSprite::decode(bytes) {
+                        Ok(sprite) => {
+                            // Extend vec to cover this 0-based index
+                            while sprites.len() < id as usize {
+                                sprites.push(None);
+                            }
+                            sprites[(id - 1) as usize] = Some(sprite);
+                            last_found = id;
+                            found_count += 1;
+                        }
+                        Err(e) => {
+                            warn!("Failed to decode {}: {}", name_lower, e);
+                            // Still extend the vec so indices stay aligned
+                            while sprites.len() < id as usize {
+                                sprites.push(None);
+                            }
+                        }
+                    }
+                }
+                None => {
+                    // Allow gaps, but stop after 100 consecutive misses past last found
+                    if id > last_found + 100 && last_found > 0 {
+                        break;
+                    }
+                    // Keep extending so indices stay aligned
+                    while sprites.len() < id as usize {
+                        sprites.push(None);
+                    }
+                }
+            }
+        }
+
+        if found_count == 0 {
+            warn!("No HPF wall sprites found in asset archives");
+            return None;
+        }
+
+        match render::SpriteAtlas::build(&sprites, palette, 28) {
             Ok(atlas) => {
                 let (w, h) = atlas.dimensions();
                 info!(
-                    "Built tile atlas: {}x{} ({} tiles)",
+                    "Built wall sprite atlas: {}x{} ({} sprites loaded, {} entries)",
                     w,
                     h,
-                    atlas.tile_count()
+                    found_count,
+                    atlas.sprite_count()
                 );
                 Some(atlas)
             }
             Err(e) => {
-                warn!("Failed to build tile atlas: {}", e);
+                warn!("Failed to build wall sprite atlas: {}", e);
                 None
             }
         }
     }
 
-    /// Upload the atlas texture to the GPU on the first frame, when the renderer
-    /// has reported the actual max texture size.
+    /// Upload the tile atlas texture to the GPU on the first frame.
     fn try_upload_atlas(&mut self, ctx: &egui::Context) {
         if !self.atlas_needs_upload {
             return;
@@ -133,6 +216,38 @@ impl EditorApp {
         );
         info!("Uploaded tile atlas texture to GPU (max_side={})", max_side);
         self.atlas_texture = Some(texture);
+    }
+
+    /// Upload the wall sprite atlas texture to the GPU on the first frame.
+    fn try_upload_wall_atlas(&mut self, ctx: &egui::Context) {
+        if !self.wall_atlas_needs_upload {
+            return;
+        }
+        self.wall_atlas_needs_upload = false;
+
+        let atlas = match &self.wall_atlas {
+            Some(a) => a,
+            None => return,
+        };
+
+        let (w, h) = atlas.dimensions();
+        let max_side = ctx.input(|i| i.max_texture_side);
+
+        if w as usize > max_side || h as usize > max_side {
+            warn!(
+                "Wall atlas {}x{} exceeds GPU max texture size {}; walls will not render",
+                w, h, max_side
+            );
+            return;
+        }
+
+        let texture = ctx.load_texture(
+            "wall_atlas",
+            egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], atlas.pixels()),
+            egui::TextureOptions::NEAREST,
+        );
+        info!("Uploaded wall sprite atlas texture to GPU");
+        self.wall_texture = Some(texture);
     }
 
     fn new_document(&mut self) {
@@ -341,8 +456,9 @@ impl eframe::App for EditorApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        // Deferred atlas upload — renderer has set the real GPU max texture size by now
+        // Deferred atlas uploads
         self.try_upload_atlas(ctx);
+        self.try_upload_wall_atlas(ctx);
 
         self.handle_keyboard_shortcuts(ctx);
 
@@ -390,6 +506,8 @@ impl eframe::App for EditorApp {
             &mut doc.camera,
             self.tile_atlas.as_ref(),
             self.atlas_texture.as_ref(),
+            self.wall_atlas.as_ref(),
+            self.wall_texture.as_ref(),
             &mut self.layer_visibility,
             &mut self.show_grid,
         );

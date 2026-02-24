@@ -3,6 +3,12 @@ use eframe::egui;
 use crate::document::{Camera, LayerVisibility};
 use crate::theme::{ThemeColors, theme_colors};
 
+/// Which half of the tile a wall sprite occupies.
+enum WallSide {
+    Left,
+    Right,
+}
+
 pub struct ViewportPanel;
 
 impl ViewportPanel {
@@ -12,6 +18,8 @@ impl ViewportPanel {
         camera: &mut Camera,
         tile_atlas: Option<&render::TileAtlas>,
         atlas_texture: Option<&egui::TextureHandle>,
+        wall_atlas: Option<&render::SpriteAtlas>,
+        wall_texture: Option<&egui::TextureHandle>,
         layers: &mut LayerVisibility,
         show_grid: &mut bool,
     ) -> Option<(u16, u16)> {
@@ -70,11 +78,45 @@ impl ViewportPanel {
                     viewport_center.y - camera.offset.y - map_center_y,
                 );
 
-                // Draw textured tiles
+                // Draw ground tiles
                 if layers.ground {
                     if let (Some(atlas), Some(texture)) = (tile_atlas, atlas_texture) {
                         Self::draw_tiles(
                             &painter, map, atlas, texture, origin, half_w, half_h, rect,
+                        );
+                    }
+                }
+
+                // Draw left wall sprites (foreground, on top of ground)
+                if layers.left_wall {
+                    if let (Some(atlas), Some(texture)) = (wall_atlas, wall_texture) {
+                        Self::draw_wall_sprites(
+                            &painter,
+                            map,
+                            atlas,
+                            texture,
+                            origin,
+                            half_w,
+                            half_h,
+                            rect,
+                            WallSide::Left,
+                        );
+                    }
+                }
+
+                // Draw right wall sprites (foreground, on top of ground)
+                if layers.right_wall {
+                    if let (Some(atlas), Some(texture)) = (wall_atlas, wall_texture) {
+                        Self::draw_wall_sprites(
+                            &painter,
+                            map,
+                            atlas,
+                            texture,
+                            origin,
+                            half_w,
+                            half_h,
+                            rect,
+                            WallSide::Right,
                         );
                     }
                 }
@@ -100,6 +142,83 @@ impl ViewportPanel {
             });
 
         hover_tile
+    }
+
+    fn draw_wall_sprites(
+        painter: &egui::Painter,
+        map: &map::Map,
+        atlas: &render::SpriteAtlas,
+        texture: &egui::TextureHandle,
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+        viewport: egui::Rect,
+        side: WallSide,
+    ) {
+        let zoom = half_w / (map::TILE_WIDTH / 2.0);
+        let mut mesh = egui::Mesh::with_texture(texture.id());
+
+        for row in 0..map.height {
+            for col in 0..map.width {
+                let tile = &map.tiles[row as usize * map.width as usize + col as usize];
+
+                let wall_id = match side {
+                    WallSide::Left => tile.left_wall,
+                    WallSide::Right => tile.right_wall,
+                };
+
+                if wall_id == 0 {
+                    continue;
+                }
+
+                // 1-based ID → 0-based atlas index
+                let atlas_index = (wall_id - 1) as u32;
+
+                let sprite_h = atlas.sprite_height(atlas_index);
+                if sprite_h == 0 {
+                    continue;
+                }
+
+                // Isometric position: top vertex of the diamond
+                let cx = origin.x + (col as f32 - row as f32) * half_w;
+                let cy = origin.y + (col as f32 + row as f32) * half_h;
+
+                // Bottom vertex of the diamond
+                let bottom_y = cy + 2.0 * half_h;
+
+                // Sprite screen dimensions
+                let sprite_screen_h = sprite_h as f32 * zoom;
+
+                // Position sprite in the correct half, anchored at bottom-center
+                let sprite_rect = match side {
+                    WallSide::Left => egui::Rect::from_min_max(
+                        egui::pos2(cx - half_w, bottom_y - sprite_screen_h),
+                        egui::pos2(cx, bottom_y),
+                    ),
+                    WallSide::Right => egui::Rect::from_min_max(
+                        egui::pos2(cx, bottom_y - sprite_screen_h),
+                        egui::pos2(cx + half_w, bottom_y),
+                    ),
+                };
+
+                // Frustum cull
+                if !viewport.intersects(sprite_rect) {
+                    continue;
+                }
+
+                if let Some((u_min, v_min, u_max, v_max)) = atlas.sprite_uv(atlas_index) {
+                    let uv = egui::Rect::from_min_max(
+                        egui::pos2(u_min, v_min),
+                        egui::pos2(u_max, v_max),
+                    );
+                    mesh.add_rect_with_uv(sprite_rect, uv, egui::Color32::WHITE);
+                }
+            }
+        }
+
+        if !mesh.is_empty() {
+            painter.add(egui::Shape::mesh(mesh));
+        }
     }
 
     fn draw_overlay(
