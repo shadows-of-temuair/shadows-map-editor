@@ -13,8 +13,11 @@ const HPF_SIGNATURE: u32 = 0xFF02AA55;
 ///   - Bytes 4+:  Huffman-compressed bitstream
 ///
 /// After decompression (or if uncompressed):
-///   - Bytes 0–7: 8-byte header (width u16 LE, height u16 LE, 4 unknown)
+///   - Bytes 0–7: 8-byte header (reserved; width is always 28)
 ///   - Bytes 8+:  pixel data (8-bit palette-indexed, row-major)
+///
+/// The pixel width is fixed at 28 (half a ground tile). The pixel height is
+/// derived from the data length: `(decompressed_size - 8) / 28`.
 pub struct HpfSprite {
     pub width: u16,
     pub height: u16,
@@ -81,34 +84,26 @@ impl HpfSprite {
             data.to_vec()
         };
 
-        // Parse the 8-byte header from the decompressed buffer.
-        if buffer.len() < 8 {
+        // Skip the 8-byte header; width is fixed at 28, height is derived
+        // from the remaining data length.
+        if buffer.len() <= 8 {
             return Err(HpfError::TooShort);
         }
 
-        // Header: height first, then width (matches original engine convention)
-        let height = u16::from_le_bytes([buffer[0], buffer[1]]);
-        let width = u16::from_le_bytes([buffer[2], buffer[3]]);
-        // bytes 4–7: unknown / reserved
+        let pixel_data = &buffer[8..];
+        let width: u16 = 28;
+        let height = (pixel_data.len() / width as usize) as u16;
 
-        if width == 0 || height == 0 {
+        if height == 0 {
             return Err(HpfError::InvalidDimensions { width, height });
         }
 
-        let expected_pixels = width as usize * height as usize;
-        let pixel_data = &buffer[8..];
-
-        if pixel_data.len() < expected_pixels {
-            return Err(HpfError::SizeMismatch {
-                expected: expected_pixels,
-                got: pixel_data.len(),
-            });
-        }
+        let pixel_count = width as usize * height as usize;
 
         Ok(Self {
             width,
             height,
-            pixels: pixel_data[..expected_pixels].to_vec(),
+            pixels: pixel_data[..pixel_count].to_vec(),
         })
     }
 }

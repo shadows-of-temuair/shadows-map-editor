@@ -3,10 +3,22 @@ use eframe::egui;
 use crate::document::{Camera, LayerVisibility};
 use crate::theme::{ThemeColors, theme_colors};
 
-/// Which half of the tile a wall sprite occupies.
-enum WallSide {
-    Left,
-    Right,
+/// Returns true if a wall tile ID should be rendered.
+///
+/// Matches the reference engine's `IsRenderedTileIndex`:
+///   `(id > 10012) || ((id % 10000) > 12)`
+/// ID 0 is always "no wall".
+fn is_rendered_wall(id: u16) -> bool {
+    if id == 0 {
+        return false;
+    }
+    (id > 10012) || ((id % 10000) > 12)
+}
+
+#[derive(Default)]
+pub struct ViewportResult {
+    pub hover_tile: Option<(u16, u16)>,
+    pub clicked_tile: Option<(u16, u16)>,
 }
 
 pub struct ViewportPanel;
@@ -22,9 +34,9 @@ impl ViewportPanel {
         wall_texture: Option<&egui::TextureHandle>,
         layers: &mut LayerVisibility,
         show_grid: &mut bool,
-    ) -> Option<(u16, u16)> {
+    ) -> ViewportResult {
         let colors = theme_colors();
-        let mut hover_tile = None;
+        let mut result = ViewportResult::default();
 
         egui::CentralPanel::default()
             .frame(
@@ -78,59 +90,37 @@ impl ViewportPanel {
                     viewport_center.y - camera.offset.y - map_center_y,
                 );
 
-                // Draw ground tiles
-                if layers.ground {
-                    if let (Some(atlas), Some(texture)) = (tile_atlas, atlas_texture) {
-                        Self::draw_tiles(
-                            &painter, map, atlas, texture, origin, half_w, half_h, rect,
-                        );
-                    }
-                }
-
-                // Draw left wall sprites (foreground, on top of ground)
-                if layers.left_wall {
-                    if let (Some(atlas), Some(texture)) = (wall_atlas, wall_texture) {
-                        Self::draw_wall_sprites(
-                            &painter,
-                            map,
-                            atlas,
-                            texture,
-                            origin,
-                            half_w,
-                            half_h,
-                            rect,
-                            WallSide::Left,
-                        );
-                    }
-                }
-
-                // Draw right wall sprites (foreground, on top of ground)
-                if layers.right_wall {
-                    if let (Some(atlas), Some(texture)) = (wall_atlas, wall_texture) {
-                        Self::draw_wall_sprites(
-                            &painter,
-                            map,
-                            atlas,
-                            texture,
-                            origin,
-                            half_w,
-                            half_h,
-                            rect,
-                            WallSide::Right,
-                        );
-                    }
-                }
+                // Draw all tiles in isometric depth order (back-to-front).
+                // For each tile: ground, then left wall, then right wall.
+                // This prevents tall wall sprites from clipping behind
+                // tiles that are closer to the camera.
+                Self::draw_scene(
+                    &painter,
+                    map,
+                    tile_atlas,
+                    atlas_texture,
+                    wall_atlas,
+                    wall_texture,
+                    origin,
+                    half_w,
+                    half_h,
+                    rect,
+                    layers,
+                );
 
                 // Draw grid overlay
                 if *show_grid {
                     Self::draw_grid(&painter, map, origin, half_w, half_h);
                 }
 
-                // Mouse → tile hover
+                // Mouse → tile hover and click selection
                 if let Some(pointer_pos) = response.hover_pos() {
                     let tile = Self::screen_to_tile(pointer_pos, origin, half_w, half_h, map);
                     if let Some((col, row)) = tile {
-                        hover_tile = Some((col, row));
+                        result.hover_tile = Some((col, row));
+                        if response.clicked() {
+                            result.clicked_tile = Some((col, row));
+                        }
                         Self::draw_tile_highlight(
                             &painter, col, row, origin, half_w, half_h, &colors,
                         );
@@ -141,83 +131,161 @@ impl ViewportPanel {
                 Self::draw_overlay(ui, rect, show_grid, layers, &colors);
             });
 
-        hover_tile
+        result
     }
 
-    fn draw_wall_sprites(
+    /// Draw ground tiles and wall sprites in isometric depth order.
+    ///
+    /// Iterates tiles by increasing `row + col` (back-to-front). For each tile
+    /// the draw order is: ground, left wall, right wall. This ensures that tall
+    /// wall sprites on near tiles correctly occlude sprites on far tiles.
+    ///
+    /// Ground tiles sharing the same atlas are batched into one mesh per depth
+    /// band, and walls likewise, so we get reasonable draw-call counts while
+    /// maintaining correct depth ordering.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_scene(
         painter: &egui::Painter,
         map: &map::Map,
-        atlas: &render::SpriteAtlas,
-        texture: &egui::TextureHandle,
+        tile_atlas: Option<&render::TileAtlas>,
+        tile_texture: Option<&egui::TextureHandle>,
+        wall_atlas: Option<&render::SpriteAtlas>,
+        wall_texture: Option<&egui::TextureHandle>,
         origin: egui::Pos2,
         half_w: f32,
         half_h: f32,
         viewport: egui::Rect,
-        side: WallSide,
+        layers: &LayerVisibility,
     ) {
+        let tw = half_w * 2.0;
+        let th = half_h * 2.0;
         let zoom = half_w / (map::TILE_WIDTH / 2.0);
-        let mut mesh = egui::Mesh::with_texture(texture.id());
 
-        for row in 0..map.height {
-            for col in 0..map.width {
-                let tile = &map.tiles[row as usize * map.width as usize + col as usize];
+        let max_depth = map.width as u16 + map.height as u16;
 
-                let wall_id = match side {
-                    WallSide::Left => tile.left_wall,
-                    WallSide::Right => tile.right_wall,
-                };
+        for depth in 0..max_depth {
+            // All (col, row) pairs with col + row == depth, within map bounds.
+            let row_min = depth.saturating_sub(map.width - 1);
+            let row_max = depth.min(map.height - 1);
 
-                if wall_id == 0 {
-                    continue;
-                }
+            // Batch ground tiles for this depth band.
+            let mut ground_mesh = tile_texture
+                .as_ref()
+                .map(|t| egui::Mesh::with_texture(t.id()));
 
-                // 1-based ID → 0-based atlas index
-                let atlas_index = (wall_id - 1) as u32;
+            // Batch wall sprites for this depth band.
+            let mut wall_mesh = wall_texture
+                .as_ref()
+                .map(|t| egui::Mesh::with_texture(t.id()));
 
-                let sprite_h = atlas.sprite_height(atlas_index);
-                if sprite_h == 0 {
-                    continue;
-                }
+            for row in row_min..=row_max {
+                let col = depth - row;
+                let tile =
+                    &map.tiles[row as usize * map.width as usize + col as usize];
 
-                // Isometric position: top vertex of the diamond
                 let cx = origin.x + (col as f32 - row as f32) * half_w;
                 let cy = origin.y + (col as f32 + row as f32) * half_h;
 
-                // Bottom vertex of the diamond
+                // --- Ground ---
+                if layers.ground && tile.ground != 0 {
+                    if let (Some(atlas), Some(mesh)) =
+                        (tile_atlas, ground_mesh.as_mut())
+                    {
+                        let atlas_index = (tile.ground - 1) as u32;
+                        let tile_rect = egui::Rect::from_min_size(
+                            egui::pos2(cx - half_w, cy),
+                            egui::vec2(tw, th),
+                        );
+                        if viewport.intersects(tile_rect) {
+                            if let Some((u0, v0, u1, v1)) = atlas.tile_uv(atlas_index) {
+                                let uv = egui::Rect::from_min_max(
+                                    egui::pos2(u0, v0),
+                                    egui::pos2(u1, v1),
+                                );
+                                mesh.add_rect_with_uv(
+                                    tile_rect,
+                                    uv,
+                                    egui::Color32::WHITE,
+                                );
+                            }
+                        }
+                    }
+                }
+
                 let bottom_y = cy + 2.0 * half_h;
 
-                // Sprite screen dimensions
-                let sprite_screen_h = sprite_h as f32 * zoom;
-
-                // Position sprite in the correct half, anchored at bottom-center
-                let sprite_rect = match side {
-                    WallSide::Left => egui::Rect::from_min_max(
-                        egui::pos2(cx - half_w, bottom_y - sprite_screen_h),
-                        egui::pos2(cx, bottom_y),
-                    ),
-                    WallSide::Right => egui::Rect::from_min_max(
-                        egui::pos2(cx, bottom_y - sprite_screen_h),
-                        egui::pos2(cx + half_w, bottom_y),
-                    ),
-                };
-
-                // Frustum cull
-                if !viewport.intersects(sprite_rect) {
-                    continue;
+                // --- Left wall ---
+                if layers.left_wall && is_rendered_wall(tile.left_wall) {
+                    if let (Some(atlas), Some(mesh)) =
+                        (wall_atlas, wall_mesh.as_mut())
+                    {
+                        let idx = tile.left_wall as u32;
+                        let sh = atlas.sprite_height(idx);
+                        if sh > 0 {
+                            let screen_h = sh as f32 * zoom;
+                            let sprite_rect = egui::Rect::from_min_max(
+                                egui::pos2(cx - half_w, bottom_y - screen_h),
+                                egui::pos2(cx, bottom_y),
+                            );
+                            if viewport.intersects(sprite_rect) {
+                                if let Some((u0, v0, u1, v1)) = atlas.sprite_uv(idx) {
+                                    let uv = egui::Rect::from_min_max(
+                                        egui::pos2(u0, v0),
+                                        egui::pos2(u1, v1),
+                                    );
+                                    mesh.add_rect_with_uv(
+                                        sprite_rect,
+                                        uv,
+                                        egui::Color32::WHITE,
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
 
-                if let Some((u_min, v_min, u_max, v_max)) = atlas.sprite_uv(atlas_index) {
-                    let uv = egui::Rect::from_min_max(
-                        egui::pos2(u_min, v_min),
-                        egui::pos2(u_max, v_max),
-                    );
-                    mesh.add_rect_with_uv(sprite_rect, uv, egui::Color32::WHITE);
+                // --- Right wall ---
+                if layers.right_wall && is_rendered_wall(tile.right_wall) {
+                    if let (Some(atlas), Some(mesh)) =
+                        (wall_atlas, wall_mesh.as_mut())
+                    {
+                        let idx = tile.right_wall as u32;
+                        let sh = atlas.sprite_height(idx);
+                        if sh > 0 {
+                            let screen_h = sh as f32 * zoom;
+                            let sprite_rect = egui::Rect::from_min_max(
+                                egui::pos2(cx, bottom_y - screen_h),
+                                egui::pos2(cx + half_w, bottom_y),
+                            );
+                            if viewport.intersects(sprite_rect) {
+                                if let Some((u0, v0, u1, v1)) = atlas.sprite_uv(idx) {
+                                    let uv = egui::Rect::from_min_max(
+                                        egui::pos2(u0, v0),
+                                        egui::pos2(u1, v1),
+                                    );
+                                    mesh.add_rect_with_uv(
+                                        sprite_rect,
+                                        uv,
+                                        egui::Color32::WHITE,
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
-        }
 
-        if !mesh.is_empty() {
-            painter.add(egui::Shape::mesh(mesh));
+            // Flush this depth band: ground first, then walls on top.
+            if let Some(mesh) = ground_mesh {
+                if !mesh.is_empty() {
+                    painter.add(egui::Shape::mesh(mesh));
+                }
+            }
+            if let Some(mesh) = wall_mesh {
+                if !mesh.is_empty() {
+                    painter.add(egui::Shape::mesh(mesh));
+                }
+            }
         }
     }
 
@@ -409,57 +477,6 @@ impl ViewportPanel {
         }
     }
 
-    fn draw_tiles(
-        painter: &egui::Painter,
-        map: &map::Map,
-        atlas: &render::TileAtlas,
-        texture: &egui::TextureHandle,
-        origin: egui::Pos2,
-        half_w: f32,
-        half_h: f32,
-        viewport: egui::Rect,
-    ) {
-        let tw = half_w * 2.0;
-        let th = half_h * 2.0;
-        let mut mesh = egui::Mesh::with_texture(texture.id());
-
-        for row in 0..map.height {
-            for col in 0..map.width {
-                let tile = &map.tiles[row as usize * map.width as usize + col as usize];
-                let ground = tile.ground;
-                if ground == 0 {
-                    continue;
-                }
-                // Ground IDs are 1-based (0 = empty), atlas indices are 0-based
-                let atlas_index = (ground - 1) as u32;
-
-                // Top vertex of the diamond
-                let cx = origin.x + (col as f32 - row as f32) * half_w;
-                let cy = origin.y + (col as f32 + row as f32) * half_h;
-
-                // Bounding rect for the tile image
-                let tile_rect =
-                    egui::Rect::from_min_size(egui::pos2(cx - half_w, cy), egui::vec2(tw, th));
-
-                // Frustum cull
-                if !viewport.intersects(tile_rect) {
-                    continue;
-                }
-
-                if let Some((u_min, v_min, u_max, v_max)) = atlas.tile_uv(atlas_index) {
-                    let uv = egui::Rect::from_min_max(
-                        egui::pos2(u_min, v_min),
-                        egui::pos2(u_max, v_max),
-                    );
-                    mesh.add_rect_with_uv(tile_rect, uv, egui::Color32::WHITE);
-                }
-            }
-        }
-
-        if !mesh.is_empty() {
-            painter.add(egui::Shape::mesh(mesh));
-        }
-    }
 
     fn draw_grid(
         painter: &egui::Painter,

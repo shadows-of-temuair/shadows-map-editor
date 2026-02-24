@@ -87,6 +87,11 @@ impl AssetPool {
         self.index.is_empty()
     }
 
+    /// Returns an iterator over all unique asset names in the pool.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.index.keys().map(|s| s.as_str())
+    }
+
     /// Number of loaded archives.
     pub fn archive_count(&self) -> usize {
         self.archives.len()

@@ -22,8 +22,17 @@ impl Default for InspectorPanel {
     }
 }
 
+/// Data for the currently selected tile, passed from the app.
+pub struct SelectedTileInfo {
+    pub col: u16,
+    pub row: u16,
+    pub ground: u16,
+    pub left_wall: u16,
+    pub right_wall: u16,
+}
+
 impl InspectorPanel {
-    pub fn show(&mut self, ctx: &egui::Context) {
+    pub fn show(&mut self, ctx: &egui::Context, selection: Option<&SelectedTileInfo>) {
         let colors = theme_colors();
 
         egui::SidePanel::right("inspector")
@@ -40,11 +49,11 @@ impl InspectorPanel {
                     }),
             )
             .show(ctx, |ui| {
-                self.draw(ui, &colors);
+                self.draw(ui, &colors, selection);
             });
     }
 
-    fn draw(&mut self, ui: &mut egui::Ui, colors: &ThemeColors) {
+    fn draw(&mut self, ui: &mut egui::Ui, colors: &ThemeColors, selection: Option<&SelectedTileInfo>) {
         // Draw left border
         let panel_rect = ui.max_rect();
         ui.painter().line_segment(
@@ -89,7 +98,7 @@ impl InspectorPanel {
 
         match self.active_tab {
             InspectorTab::Tileset => self.draw_tileset_tab(ui, colors),
-            InspectorTab::Properties => self.draw_properties_tab(ui, colors),
+            InspectorTab::Properties => self.draw_properties_tab(ui, colors, selection),
         }
     }
 
@@ -207,7 +216,12 @@ impl InspectorPanel {
         }
     }
 
-    fn draw_properties_tab(&self, ui: &mut egui::Ui, colors: &ThemeColors) {
+    fn draw_properties_tab(
+        &self,
+        ui: &mut egui::Ui,
+        colors: &ThemeColors,
+        selection: Option<&SelectedTileInfo>,
+    ) {
         ui.label(
             egui::RichText::new("Selection")
                 .size(13.0)
@@ -215,22 +229,39 @@ impl InspectorPanel {
         );
         ui.add_space(6.0);
 
-        // Placeholder property rows
-        let props = [
-            ("Ground ID", "0"),
-            ("Left Wall", "0"),
-            ("Right Wall", "0"),
-            ("Position", "-"),
-        ];
+        match selection {
+            Some(info) => {
+                let props = [
+                    ("Position", format!("{}, {}", info.col, info.row)),
+                    ("Ground", format!("{}", info.ground)),
+                    ("Left Wall", format!("{}", info.left_wall)),
+                    ("Right Wall", format!("{}", info.right_wall)),
+                ];
 
-        for (label, value) in &props {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(*label).size(14.0).color(colors.muted));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new(*value).size(14.0).color(colors.text));
-                });
-            });
-            ui.add_space(2.0);
+                for (label, value) in &props {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(*label).size(14.0).color(colors.muted),
+                        );
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.label(
+                                    egui::RichText::new(value).size(14.0).color(colors.text),
+                                );
+                            },
+                        );
+                    });
+                    ui.add_space(2.0);
+                }
+            }
+            None => {
+                ui.label(
+                    egui::RichText::new("Click a tile to inspect")
+                        .size(13.0)
+                        .color(colors.muted),
+                );
+            }
         }
     }
 }

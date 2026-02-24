@@ -3,7 +3,8 @@ use std::fmt;
 use crate::hpf::HpfSprite;
 use crate::Palette;
 
-const ATLAS_COLUMNS: u32 = 64;
+/// Maximum atlas dimension in pixels. Chosen to fit within common GPU limits.
+const MAX_ATLAS_SIDE: u32 = 8192;
 
 /// Metadata for a single sprite within the atlas.
 #[derive(Clone, Copy, Debug)]
@@ -20,10 +21,10 @@ pub struct SpriteEntry {
 
 /// A rasterized RGBA sprite atlas for variable-height sprites.
 ///
-/// Sprites are packed into columns of fixed width. Since all wall sprites
-/// share the same pixel width (28), they are stacked vertically within each
-/// column, avoiding the wasted space that would come from padding every sprite
-/// to the tallest height.
+/// Sprites are packed into columns of fixed width using a greedy
+/// shortest-column strategy: each sprite is placed in whichever column
+/// currently has the least total height. This minimises the overall atlas
+/// height and keeps it within GPU texture limits.
 ///
 /// Each sprite's position and size is tracked in an `entries` table so that
 /// UV coordinates can be computed for any sprite by its ID.
@@ -52,9 +53,9 @@ impl std::error::Error for SpriteAtlasError {}
 impl SpriteAtlas {
     /// Build a sprite atlas from decoded HPF sprites.
     ///
-    /// `sprites` is indexed by sprite ID (0-based). `None` entries represent
+    /// `sprites` is indexed by sprite ID. `None` entries represent
     /// empty/missing sprite slots and are preserved so that lookups by tile ID
-    /// remain aligned (tile `left_wall = N` maps to `sprites[N - 1]`).
+    /// remain aligned.
     ///
     /// `sprite_width` is the fixed pixel width shared by all sprites (28 for
     /// wall sprites). `palette` converts the 8-bit indexed pixels to RGBA.
@@ -69,12 +70,26 @@ impl SpriteAtlas {
             return Err(SpriteAtlasError::NoSprites);
         }
 
-        let columns = ATLAS_COLUMNS.min(real_count as u32);
+        // Compute the total pixel height across all sprites so we can choose
+        // a column count that keeps the atlas within MAX_ATLAS_SIDE.
+        let total_height: u64 = sprites
+            .iter()
+            .filter_map(|s| s.as_ref())
+            .map(|s| s.height as u64)
+            .sum();
 
-        // First pass: assign each sprite to a column and compute column heights.
+        // Minimum columns needed: total_height / max_height, with 10% headroom
+        // for imperfect bin packing.
+        let min_columns =
+            ((total_height * 11 / 10 + MAX_ATLAS_SIDE as u64 - 1) / MAX_ATLAS_SIDE as u64)
+                .max(1) as u32;
+        // Also cap width at MAX_ATLAS_SIDE
+        let max_columns = MAX_ATLAS_SIDE / sprite_width;
+        let columns = min_columns.max(1).min(max_columns).min(real_count as u32);
+
+        // First pass: assign each sprite to the shortest column (greedy).
         let mut column_heights = vec![0u32; columns as usize];
         let mut entries: Vec<Option<SpriteEntry>> = Vec::with_capacity(sprites.len());
-        let mut col_cursor = 0u32; // round-robin column assignment
 
         for sprite_opt in sprites {
             match sprite_opt {
@@ -82,9 +97,16 @@ impl SpriteAtlas {
                     entries.push(None);
                 }
                 Some(sprite) => {
-                    let col = col_cursor % columns;
-                    let x = col * sprite_width;
-                    let y = column_heights[col as usize];
+                    // Find the column with the least height.
+                    let col = column_heights
+                        .iter()
+                        .enumerate()
+                        .min_by_key(|&(_, &h)| h)
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+
+                    let x = col as u32 * sprite_width;
+                    let y = column_heights[col];
                     let h = sprite.height as u32;
 
                     entries.push(Some(SpriteEntry {
@@ -94,8 +116,7 @@ impl SpriteAtlas {
                         height: h,
                     }));
 
-                    column_heights[col as usize] += h;
-                    col_cursor += 1;
+                    column_heights[col] += h;
                 }
             }
         }
@@ -108,7 +129,7 @@ impl SpriteAtlas {
         }
 
         // Second pass: blit sprite pixels into the RGBA atlas buffer.
-        let mut pixels = vec![0u8; (atlas_width * atlas_height * 4) as usize];
+        let mut pixels = vec![0u8; atlas_width as usize * atlas_height as usize * 4];
 
         for (i, sprite_opt) in sprites.iter().enumerate() {
             let sprite = match sprite_opt {

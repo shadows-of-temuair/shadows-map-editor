@@ -5,12 +5,10 @@ pub struct ThemeColors {
     pub bg: egui::Color32,
     pub bg_2: egui::Color32,
     pub bg_3: egui::Color32,
-    pub panel: egui::Color32,
     pub panel_2: egui::Color32,
     pub text: egui::Color32,
     pub muted: egui::Color32,
     pub accent: egui::Color32,
-    pub accent_2: egui::Color32,
     pub border: egui::Color32,
 }
 
@@ -19,12 +17,10 @@ pub fn theme_colors() -> ThemeColors {
         bg: egui::Color32::from_rgb(11, 12, 14),
         bg_2: egui::Color32::from_rgb(18, 20, 24),
         bg_3: egui::Color32::from_rgb(26, 29, 34),
-        panel: egui::Color32::from_rgb(20, 23, 27),
         panel_2: egui::Color32::from_rgb(30, 35, 40),
         text: egui::Color32::from_rgb(227, 227, 227),
         muted: egui::Color32::from_rgb(163, 167, 173),
         accent: egui::Color32::from_rgb(224, 138, 53),
-        accent_2: egui::Color32::from_rgb(240, 176, 110),
         border: egui::Color32::from_rgb(44, 50, 56),
     }
 }

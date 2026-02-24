@@ -33,17 +33,6 @@ impl Tool {
         Tool::Rectangle,
     ];
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Tool::Select => "V",
-            Tool::Pencil => "B",
-            Tool::Eraser => "E",
-            Tool::Fill => "G",
-            Tool::Eyedropper => "I",
-            Tool::Rectangle => "R",
-        }
-    }
-
     pub fn tooltip(self) -> &'static str {
         match self {
             Tool::Select => "Select (V)",

@@ -5,8 +5,8 @@ use tracing::{info, warn};
 
 use crate::document::{LayerVisibility, MapDocument};
 use crate::panels::{
-    InspectorPanel, StatusBarAction, StatusBarPanel, TabBarAction, TabBarPanel, TitleBarPanel,
-    Tool, ToolbarAction, ToolbarPanel, ViewportPanel,
+    InspectorPanel, SelectedTileInfo, StatusBarAction, StatusBarPanel, TabBarAction, TabBarPanel,
+    TitleBarPanel, Tool, ToolbarAction, ToolbarPanel, ViewportPanel,
 };
 use crate::theme;
 
@@ -22,6 +22,7 @@ pub struct EditorApp {
     wall_atlas: Option<render::SpriteAtlas>,
     wall_texture: Option<egui::TextureHandle>,
     hover_tile: (u16, u16),
+    selected_tile: Option<(u16, u16)>,
     atlas_needs_upload: bool,
     wall_atlas_needs_upload: bool,
 }
@@ -48,6 +49,7 @@ impl EditorApp {
             atlas_texture: None,
             wall_texture: None,
             hover_tile: (0, 0),
+            selected_tile: None,
         }
     }
 
@@ -122,7 +124,9 @@ impl EditorApp {
         let mut last_found = 0u32;
         let mut found_count = 0u32;
 
-        for id in 1..=99_999u32 {
+        // Wall IDs are 1-indexed: tile wall_id=741 maps to stc00741.hpf.
+        // We load starting from 0 to fill the array; index 0 is unused.
+        for id in 0..=99_999u32 {
             // Try lowercase first, then uppercase (archive names may vary)
             let name_lower = format!("stc{:05}.hpf", id);
             let name_upper = format!("STC{:05}.HPF", id);
@@ -132,18 +136,16 @@ impl EditorApp {
                 Some(bytes) => {
                     match render::HpfSprite::decode(bytes) {
                         Ok(sprite) => {
-                            // Extend vec to cover this 0-based index
-                            while sprites.len() < id as usize {
+                            while sprites.len() <= id as usize {
                                 sprites.push(None);
                             }
-                            sprites[(id - 1) as usize] = Some(sprite);
+                            sprites[id as usize] = Some(sprite);
                             last_found = id;
                             found_count += 1;
                         }
                         Err(e) => {
                             warn!("Failed to decode {}: {}", name_lower, e);
-                            // Still extend the vec so indices stay aligned
-                            while sprites.len() < id as usize {
+                            while sprites.len() <= id as usize {
                                 sprites.push(None);
                             }
                         }
@@ -151,11 +153,10 @@ impl EditorApp {
                 }
                 None => {
                     // Allow gaps, but stop after 100 consecutive misses past last found
-                    if id > last_found + 100 && last_found > 0 {
+                    if id > last_found + 100 && found_count > 0 {
                         break;
                     }
-                    // Keep extending so indices stay aligned
-                    while sprites.len() < id as usize {
+                    while sprites.len() <= id as usize {
                         sprites.push(None);
                     }
                 }
@@ -496,11 +497,24 @@ impl eframe::App for EditorApp {
             ToolbarAction::SaveFile => self.save_document(),
             ToolbarAction::None => {}
         }
-        self.inspector.show(ctx);
+
+        // Build selection info for the inspector
+        let selection_info = self.selected_tile.and_then(|(col, row)| {
+            let doc = &self.documents[self.active_tab];
+            let idx = row as usize * doc.map.width as usize + col as usize;
+            doc.map.tiles.get(idx).map(|tile| SelectedTileInfo {
+                col,
+                row,
+                ground: tile.ground,
+                left_wall: tile.left_wall,
+                right_wall: tile.right_wall,
+            })
+        });
+        self.inspector.show(ctx, selection_info.as_ref());
 
         // Viewport needs mutable access to camera for panning
         let doc = &mut self.documents[self.active_tab];
-        let hover = ViewportPanel::show(
+        let vp_result = ViewportPanel::show(
             ctx,
             &doc.map,
             &mut doc.camera,
@@ -511,8 +525,11 @@ impl eframe::App for EditorApp {
             &mut self.layer_visibility,
             &mut self.show_grid,
         );
-        if let Some(tile) = hover {
+        if let Some(tile) = vp_result.hover_tile {
             self.hover_tile = tile;
+        }
+        if let Some(tile) = vp_result.clicked_tile {
+            self.selected_tile = Some(tile);
         }
     }
 }
