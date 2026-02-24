@@ -76,11 +76,8 @@ impl StatusBarPanel {
 
                         Self::separator(ui, &colors);
 
-                        // Dimensions dropdown
-                        ui.label(
-                            egui::RichText::new("Size").size(13.0).color(colors.muted),
-                        );
-                        let dim_text = format!("{}×{} ▾", map.width, map.height);
+                        // Dimensions dropdown: button first (rightward in RTL), then "Size" label
+                        let dim_text = format!("{}x{}", map.width, map.height);
                         let dim_response = ui.add(
                             egui::Button::new(
                                 egui::RichText::new(&dim_text).size(13.0).color(colors.text),
@@ -88,6 +85,25 @@ impl StatusBarPanel {
                             .fill(egui::Color32::TRANSPARENT)
                             .stroke(egui::Stroke::NONE)
                             .corner_radius(0.0),
+                        );
+                        // Paint a small caret triangle next to the button
+                        {
+                            let r = dim_response.rect;
+                            let cx = r.right() + 4.0;
+                            let cy = r.center().y;
+                            let s = 3.0;
+                            ui.painter().add(egui::Shape::convex_polygon(
+                                vec![
+                                    egui::pos2(cx - s, cy - s * 0.5),
+                                    egui::pos2(cx + s, cy - s * 0.5),
+                                    egui::pos2(cx, cy + s * 0.5),
+                                ],
+                                colors.muted,
+                                egui::Stroke::NONE,
+                            ));
+                        }
+                        ui.label(
+                            egui::RichText::new("Size").size(13.0).color(colors.muted),
                         );
 
                         egui::Popup::from_toggle_button_response(&dim_response)
@@ -102,7 +118,7 @@ impl StatusBarPanel {
                                         for (w, h) in dims {
                                             let is_current =
                                                 w == map.width && h == map.height;
-                                            let label = format!("{}×{}", w, h);
+                                            let label = format!("{}x{}", w, h);
                                             let text_color = if is_current {
                                                 colors.accent
                                             } else {
@@ -139,18 +155,8 @@ impl StatusBarPanel {
 
                         Self::separator(ui, &colors);
 
-                        // Zoom controls: [+] "Zoom N%" [-] (RTL order)
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new("+").size(14.0).color(colors.muted),
-                                )
-                                .fill(egui::Color32::TRANSPARENT)
-                                .stroke(egui::Stroke::NONE)
-                                .min_size(egui::vec2(18.0, 18.0)),
-                            )
-                            .clicked()
-                        {
+                        // Zoom controls: [+] "Zoom N%" [-] (RTL order: + is rightmost)
+                        if Self::zoom_button(ui, "+", &colors, "Zoom in (Cmd+Plus)") {
                             action = StatusBarAction::ZoomIn;
                         }
 
@@ -160,24 +166,51 @@ impl StatusBarPanel {
                             egui::RichText::new(zoom_text).size(13.0).color(colors.text),
                         );
 
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new("-").size(14.0).color(colors.muted),
-                                )
-                                .fill(egui::Color32::TRANSPARENT)
-                                .stroke(egui::Stroke::NONE)
-                                .min_size(egui::vec2(18.0, 18.0)),
-                            )
-                            .clicked()
-                        {
+                        if Self::zoom_button(ui, "-", &colors, "Zoom out (Cmd+Minus)") {
                             action = StatusBarAction::ZoomOut;
                         }
+
+                        Self::separator(ui, &colors);
                     });
                 });
             });
 
         action
+    }
+
+    fn zoom_button(ui: &mut egui::Ui, label: &str, colors: &ThemeColors, tooltip: &str) -> bool {
+        let size = egui::vec2(20.0, 20.0);
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+
+        let bg = if response.hovered() {
+            colors.panel_2
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        let border = if response.hovered() {
+            egui::Stroke::new(1.0, colors.border)
+        } else {
+            egui::Stroke::NONE
+        };
+
+        ui.painter()
+            .rect(rect, 4.0, bg, border, egui::StrokeKind::Inside);
+
+        let text_color = if response.hovered() {
+            colors.text
+        } else {
+            colors.muted
+        };
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::FontId::proportional(14.0),
+            text_color,
+        );
+
+        response.clone().on_hover_text(tooltip);
+        response.clicked()
     }
 
     fn separator(ui: &mut egui::Ui, colors: &ThemeColors) {

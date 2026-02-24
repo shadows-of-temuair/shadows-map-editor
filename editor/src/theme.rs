@@ -80,6 +80,11 @@ pub fn apply_theme(ctx: &egui::Context) {
     style.interaction.selectable_labels = false;
 
     ctx.set_style(style);
+
+    // Disable egui's built-in Cmd+/- UI scaling — we handle zoom ourselves
+    ctx.options_mut(|opts| {
+        opts.zoom_with_keyboard = false;
+    });
 }
 
 /// Draws the isometric grid icon (matching the app icon) into a given rect.

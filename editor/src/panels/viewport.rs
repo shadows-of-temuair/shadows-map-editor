@@ -30,10 +30,11 @@ impl ViewportPanel {
                     ui.interact(rect, ui.id().with("viewport"), egui::Sense::click_and_drag());
 
                 // Right-click or middle-click drag panning
-                if response.dragged_by(egui::PointerButton::Secondary)
-                    || response.dragged_by(egui::PointerButton::Middle)
-                {
+                let is_panning = response.dragged_by(egui::PointerButton::Secondary)
+                    || response.dragged_by(egui::PointerButton::Middle);
+                if is_panning {
                     camera.offset -= response.drag_delta();
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                 }
 
                 // Mouse wheel zoom
@@ -151,8 +152,18 @@ impl ViewportPanel {
         let right_rect =
             egui::Rect::from_min_size(egui::pos2(x, btn_y), egui::vec2(layer_w, btn_h));
 
-        // Do all interactions (needs &mut ui)
-        Self::overlay_toggle(ui, "Grid", grid_rect, show_grid, colors, "Grid");
+        // Paint background and separator first (each painter() borrow is temporary)
+        ui.painter().rect(
+            overlay_rect,
+            6.0,
+            egui::Color32::from_rgba_unmultiplied(18, 20, 24, 200),
+            egui::Stroke::new(1.0, colors.border),
+            egui::StrokeKind::Inside,
+        );
+        ui.painter().rect_filled(sep_rect, 0.0, colors.border);
+
+        // Then do interactions + paint buttons on top
+        Self::overlay_toggle(ui, "Grid", grid_rect, show_grid, colors, "Grid (Cmd+4)");
         Self::overlay_toggle(
             ui,
             "G",
@@ -177,16 +188,6 @@ impl ViewportPanel {
             colors,
             "Right Wall (Cmd+3)",
         );
-
-        // Paint background and separator (only needs &ui for painter)
-        ui.painter().rect(
-            overlay_rect,
-            6.0,
-            egui::Color32::from_rgba_unmultiplied(18, 20, 24, 200),
-            egui::Stroke::new(1.0, colors.border),
-            egui::StrokeKind::Inside,
-        );
-        ui.painter().rect_filled(sep_rect, 0.0, colors.border);
     }
 
     fn overlay_toggle(
@@ -200,12 +201,13 @@ impl ViewportPanel {
         let id = ui.id().with(("overlay_toggle", label));
         let response = ui.interact(rect, id, egui::Sense::click());
 
+        // Use opaque backgrounds so the semi-transparent panel doesn't bleed through
         let bg = if *enabled {
             colors.accent.gamma_multiply(0.2)
         } else if response.hovered() {
             colors.panel_2
         } else {
-            egui::Color32::TRANSPARENT
+            egui::Color32::from_rgb(18, 20, 24)
         };
 
         let border = if *enabled {

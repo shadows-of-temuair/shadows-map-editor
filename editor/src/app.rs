@@ -207,56 +207,77 @@ impl EditorApp {
     }
 
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
-        let (new, open, save, save_as, close, tool, toggle_layer) = ctx.input(|i| {
-            let cmd = i.modifiers.command;
-            let shift = i.modifiers.shift;
+        let (new, open, save, save_as, close, tool, toggle_layer, keyboard_zoom, reset_zoom) =
+            ctx.input(|i| {
+                let cmd = i.modifiers.command;
+                let shift = i.modifiers.shift;
 
-            // Tool shortcuts (no modifiers)
-            let tool = if !cmd && !shift {
-                if i.key_pressed(egui::Key::V) {
-                    Some(Tool::Select)
-                } else if i.key_pressed(egui::Key::B) {
-                    Some(Tool::Pencil)
-                } else if i.key_pressed(egui::Key::E) {
-                    Some(Tool::Eraser)
-                } else if i.key_pressed(egui::Key::G) {
-                    Some(Tool::Fill)
-                } else if i.key_pressed(egui::Key::I) {
-                    Some(Tool::Eyedropper)
-                } else if i.key_pressed(egui::Key::R) {
-                    Some(Tool::Rectangle)
+                // Tool shortcuts (no modifiers)
+                let tool = if !cmd && !shift {
+                    if i.key_pressed(egui::Key::V) {
+                        Some(Tool::Select)
+                    } else if i.key_pressed(egui::Key::B) {
+                        Some(Tool::Pencil)
+                    } else if i.key_pressed(egui::Key::E) {
+                        Some(Tool::Eraser)
+                    } else if i.key_pressed(egui::Key::G) {
+                        Some(Tool::Fill)
+                    } else if i.key_pressed(egui::Key::I) {
+                        Some(Tool::Eyedropper)
+                    } else if i.key_pressed(egui::Key::R) {
+                        Some(Tool::Rectangle)
+                    } else {
+                        None
+                    }
                 } else {
                     None
-                }
-            } else {
-                None
-            };
+                };
 
-            // Layer toggle shortcuts (Cmd+1/2/3)
-            let toggle_layer = if cmd && !shift {
-                if i.key_pressed(egui::Key::Num1) {
-                    Some(1)
-                } else if i.key_pressed(egui::Key::Num2) {
-                    Some(2)
-                } else if i.key_pressed(egui::Key::Num3) {
-                    Some(3)
+                // Layer/grid toggle shortcuts (Cmd+1/2/3/4)
+                let toggle_layer = if cmd && !shift {
+                    if i.key_pressed(egui::Key::Num1) {
+                        Some(1)
+                    } else if i.key_pressed(egui::Key::Num2) {
+                        Some(2)
+                    } else if i.key_pressed(egui::Key::Num3) {
+                        Some(3)
+                    } else if i.key_pressed(egui::Key::Num4) {
+                        Some(4)
+                    } else {
+                        None
+                    }
                 } else {
                     None
-                }
-            } else {
-                None
-            };
+                };
 
-            (
-                cmd && i.key_pressed(egui::Key::N),
-                cmd && i.key_pressed(egui::Key::O),
-                cmd && !shift && i.key_pressed(egui::Key::S),
-                cmd && shift && i.key_pressed(egui::Key::S),
-                cmd && i.key_pressed(egui::Key::W),
-                tool,
-                toggle_layer,
-            )
-        });
+                // Keyboard zoom (Cmd+/-, snap to 25%; Cmd+0 reset)
+                let keyboard_zoom: Option<i8> = if cmd && !shift {
+                    if i.key_pressed(egui::Key::Minus) {
+                        Some(-1)
+                    } else if i.key_pressed(egui::Key::Plus)
+                        || i.key_pressed(egui::Key::Equals)
+                    {
+                        Some(1)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                let reset_zoom = cmd && !shift && i.key_pressed(egui::Key::Num0);
+
+                (
+                    cmd && i.key_pressed(egui::Key::N),
+                    cmd && i.key_pressed(egui::Key::O),
+                    cmd && !shift && i.key_pressed(egui::Key::S),
+                    cmd && shift && i.key_pressed(egui::Key::S),
+                    cmd && i.key_pressed(egui::Key::W),
+                    tool,
+                    toggle_layer,
+                    keyboard_zoom,
+                    reset_zoom,
+                )
+            });
 
         if let Some(t) = tool {
             self.active_tool = t;
@@ -266,7 +287,19 @@ impl EditorApp {
                 1 => self.layer_visibility.ground = !self.layer_visibility.ground,
                 2 => self.layer_visibility.left_wall = !self.layer_visibility.left_wall,
                 3 => self.layer_visibility.right_wall = !self.layer_visibility.right_wall,
+                4 => self.show_grid = !self.show_grid,
                 _ => {}
+            }
+        }
+        if let Some(dir) = keyboard_zoom {
+            Self::snap_zoom(&mut self.documents[self.active_tab].camera, dir);
+        }
+        if reset_zoom {
+            let camera = &mut self.documents[self.active_tab].camera;
+            let old_zoom = camera.zoom;
+            if old_zoom != 1.0 {
+                camera.offset *= 1.0 / old_zoom;
+                camera.zoom = 1.0;
             }
         }
         if new {
@@ -282,6 +315,22 @@ impl EditorApp {
             self.save_document_as();
         } else if save {
             self.save_document();
+        }
+    }
+
+    /// Snap zoom to the nearest 25% boundary in the given direction.
+    fn snap_zoom(camera: &mut crate::document::Camera, dir: i8) {
+        let old_zoom = camera.zoom;
+        let pct = (old_zoom * 100.0).round();
+        let new_pct = if dir > 0 {
+            (pct / 25.0).floor() * 25.0 + 25.0
+        } else {
+            (pct / 25.0).ceil() * 25.0 - 25.0
+        };
+        let new_zoom = (new_pct / 100.0).clamp(0.25, 4.0);
+        if new_zoom != old_zoom {
+            camera.offset *= new_zoom / old_zoom;
+            camera.zoom = new_zoom;
         }
     }
 }
@@ -313,16 +362,10 @@ impl eframe::App for EditorApp {
             StatusBarPanel::show(ctx, &doc.map, self.active_tool, self.hover_tile, current_zoom);
         match status_action {
             StatusBarAction::ZoomIn => {
-                let new_zoom = (current_zoom + 0.20).min(4.0);
-                let doc = &mut self.documents[self.active_tab];
-                doc.camera.offset *= new_zoom / current_zoom;
-                doc.camera.zoom = new_zoom;
+                Self::snap_zoom(&mut self.documents[self.active_tab].camera, 1);
             }
             StatusBarAction::ZoomOut => {
-                let new_zoom = (current_zoom - 0.20).max(0.25);
-                let doc = &mut self.documents[self.active_tab];
-                doc.camera.offset *= new_zoom / current_zoom;
-                doc.camera.zoom = new_zoom;
+                Self::snap_zoom(&mut self.documents[self.active_tab].camera, -1);
             }
             StatusBarAction::SetDimensions(w, h) => {
                 self.documents[self.active_tab].set_dimensions(w, h);
