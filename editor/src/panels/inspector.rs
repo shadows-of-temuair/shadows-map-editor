@@ -2,6 +2,7 @@ use eframe::egui;
 
 use crate::document::PaintLayer;
 use crate::theme::{ThemeColors, theme_colors};
+use crate::widgets::tooltip;
 
 const INSPECTOR_MIN_WIDTH: f32 = 260.0;
 const INSPECTOR_MAX_WIDTH: f32 = 760.0;
@@ -15,6 +16,7 @@ const TAB_MAP_ROW_HEIGHT_OPEN: f32 = 22.0;
 const TAB_MAP_ROW_HEIGHT_COLLAPSED: f32 = 18.0;
 const TAB_MAP_BORDER_PAD_OPEN: f32 = 10.0;
 const TAB_MAP_BORDER_PAD_COLLAPSED: f32 = 4.0;
+const TAB_MAP_LABEL_NUDGE_Y: f32 = 1.0;
 
 pub struct InspectorPanel;
 
@@ -140,12 +142,15 @@ impl InspectorPanel {
             egui::vec2(ui.available_width(), row_height),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
-                ui.label(
-                    egui::RichText::new("Tab Map")
-                        .size(14.0)
-                        .strong()
-                        .color(colors.text),
-                );
+                ui.vertical(|ui| {
+                    ui.add_space(TAB_MAP_LABEL_NUDGE_Y);
+                    ui.label(
+                        egui::RichText::new("Tab Map")
+                            .size(14.0)
+                            .strong()
+                            .color(colors.text),
+                    );
+                });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let toggle_label = if tab_map_state.is_open() { "-" } else { "+" };
                     let response = ui.add_sized(
@@ -191,40 +196,53 @@ impl InspectorPanel {
         reveal_wall_tile: &mut Option<u16>,
         tab_map_open: bool,
     ) {
+        let wall_selected = !matches!(*active_paint_layer, PaintLayer::Ground);
+
         ui.horizontal(|ui| {
-            let show_ground = matches!(*active_paint_layer, PaintLayer::Ground);
-            if ui.selectable_label(show_ground, "Ground").clicked() {
+            ui.spacing_mut().item_spacing.x = 6.0;
+
+            let ground_response = Self::outline_toggle(ui, colors, "Ground", !wall_selected, 68.0);
+            if ground_response.clicked() {
                 *active_paint_layer = PaintLayer::Ground;
             }
-            if ui.selectable_label(!show_ground, "Wall").clicked() {
+
+            let wall_response = Self::outline_toggle(ui, colors, "Wall", wall_selected, 56.0);
+            if wall_response.clicked() {
                 if matches!(*active_paint_layer, PaintLayer::Ground) {
                     *active_paint_layer = PaintLayer::LeftWall;
                 }
             }
-        });
-        ui.add_space(4.0);
 
-        if !matches!(*active_paint_layer, PaintLayer::Ground) {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Target").size(12.0).color(colors.muted));
-                let left_response = ui
-                    .selectable_label(matches!(*active_paint_layer, PaintLayer::LeftWall), "Left");
+            if wall_selected {
+                ui.add_space(10.0);
+                ui.label(egui::RichText::new("Side").size(12.0).color(colors.muted));
+
+                let left_response = Self::outline_toggle(
+                    ui,
+                    colors,
+                    "Left",
+                    matches!(*active_paint_layer, PaintLayer::LeftWall),
+                    52.0,
+                );
                 if left_response.clicked() {
                     *active_paint_layer = PaintLayer::LeftWall;
                 }
-                left_response.on_hover_text("Toggle [Q]");
+                let _ = tooltip::attach(left_response, "Toggle [Q]");
 
-                let right_response = ui.selectable_label(
-                    matches!(*active_paint_layer, PaintLayer::RightWall),
+                let right_response = Self::outline_toggle(
+                    ui,
+                    colors,
                     "Right",
+                    matches!(*active_paint_layer, PaintLayer::RightWall),
+                    56.0,
                 );
                 if right_response.clicked() {
                     *active_paint_layer = PaintLayer::RightWall;
                 }
-                right_response.on_hover_text("Toggle [Q]");
-            });
-            ui.add_space(4.0);
-        }
+                let _ = tooltip::attach(right_response, "Toggle [Q]");
+            }
+        });
+        ui.add_space(6.0);
 
         let (selected_label, selected_id) = match *active_paint_layer {
             PaintLayer::Ground => ("Ground", *selected_ground_tile),
@@ -300,6 +318,51 @@ impl InspectorPanel {
         (available.y - reserved).max(TILE_SHEET_MIN_HEIGHT)
     }
 
+    fn outline_toggle(
+        ui: &mut egui::Ui,
+        colors: &ThemeColors,
+        label: &str,
+        selected: bool,
+        width: f32,
+    ) -> egui::Response {
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::click());
+
+        let fill = if selected {
+            colors.accent.gamma_multiply(0.14)
+        } else if response.hovered() {
+            colors.panel_2
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+
+        let stroke = if selected {
+            egui::Stroke::new(1.0, colors.accent)
+        } else {
+            egui::Stroke::new(1.0, colors.border)
+        };
+
+        let text_color = if selected {
+            colors.accent
+        } else if response.hovered() {
+            colors.text
+        } else {
+            colors.muted
+        };
+
+        ui.painter()
+            .rect(rect, 4.0, fill, stroke, egui::StrokeKind::Inside);
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::FontId::proportional(12.5),
+            text_color,
+        );
+
+        response
+    }
+
     fn draw_ground_sheet(
         ui: &mut egui::Ui,
         colors: &ThemeColors,
@@ -341,11 +404,12 @@ impl InspectorPanel {
         );
 
         let row_height = cell_size.y;
+        let row_step = row_height + ui.spacing().item_spacing.y;
         let (columns, row_count) = Self::grid_layout(
             ui,
             selectable_count,
             cell_size.x,
-            row_height,
+            row_step,
             max_palette_height,
         );
 
@@ -358,7 +422,9 @@ impl InspectorPanel {
             let target_idx = target_id.saturating_sub(1) as usize;
             if target_idx < selectable_count {
                 let target_row = target_idx / columns;
-                scroll_area = scroll_area.vertical_scroll_offset(target_row as f32 * row_height);
+                let target_offset =
+                    Self::reveal_scroll_offset(target_row, row_step, row_count, max_palette_height);
+                scroll_area = scroll_area.vertical_scroll_offset(target_offset);
                 consumed_reveal = true;
             } else {
                 *reveal_ground_tile = None;
@@ -427,11 +493,12 @@ impl InspectorPanel {
 
         let cell_size = egui::vec2(WALL_PREVIEW_WIDTH, WALL_PREVIEW_HEIGHT);
         let row_height = cell_size.y;
+        let row_step = row_height + ui.spacing().item_spacing.y;
         let (columns, row_count) = Self::grid_layout(
             ui,
             wall_ids.len(),
             cell_size.x,
-            row_height,
+            row_step,
             max_palette_height,
         );
 
@@ -443,7 +510,9 @@ impl InspectorPanel {
         if let Some(target_id) = *reveal_wall_tile {
             if let Some(target_idx) = wall_ids.iter().position(|&id| id == target_id as u32) {
                 let target_row = target_idx / columns;
-                scroll_area = scroll_area.vertical_scroll_offset(target_row as f32 * row_height);
+                let target_offset =
+                    Self::reveal_scroll_offset(target_row, row_step, row_count, max_palette_height);
+                scroll_area = scroll_area.vertical_scroll_offset(target_offset);
                 consumed_reveal = true;
             } else {
                 *reveal_wall_tile = None;
@@ -495,9 +564,18 @@ impl InspectorPanel {
             mesh.add_rect_with_uv(rect, uv, egui::Color32::WHITE);
             ui.painter().add(egui::Shape::mesh(mesh));
         }
+        if is_selected {
+            let tint = egui::Color32::from_rgba_unmultiplied(
+                colors.accent.r(),
+                colors.accent.g(),
+                colors.accent.b(),
+                36,
+            );
+            ui.painter().rect_filled(rect, 0.0, tint);
+        }
 
         let border = if is_selected {
-            egui::Stroke::new(2.0, colors.accent)
+            egui::Stroke::new(2.5, colors.accent)
         } else if response.hovered() {
             egui::Stroke::new(1.0, colors.border)
         } else {
@@ -511,7 +589,7 @@ impl InspectorPanel {
         if response.clicked() {
             *selected_ground_tile = tile_id;
         }
-        response.on_hover_text(format!("Tile {}", tile_id));
+        let _ = tooltip::attach(response, format!("Tile {}", tile_id));
     }
 
     fn wall_picker_cell(
@@ -545,9 +623,18 @@ impl InspectorPanel {
             mesh.add_rect_with_uv(image_rect, uv, egui::Color32::WHITE);
             ui.painter().add(egui::Shape::mesh(mesh));
         }
+        if is_selected {
+            let tint = egui::Color32::from_rgba_unmultiplied(
+                colors.accent.r(),
+                colors.accent.g(),
+                colors.accent.b(),
+                28,
+            );
+            ui.painter().rect_filled(rect, 0.0, tint);
+        }
 
         let border = if is_selected {
-            egui::Stroke::new(2.0, colors.accent)
+            egui::Stroke::new(2.5, colors.accent)
         } else if response.hovered() {
             egui::Stroke::new(1.0, colors.border)
         } else {
@@ -561,14 +648,14 @@ impl InspectorPanel {
         if response.clicked() {
             *selected_wall_tile = wall_id.min(u16::MAX as u32) as u16;
         }
-        response.on_hover_text(format!("Wall {}", wall_id));
+        let _ = tooltip::attach(response, format!("Wall {}", wall_id));
     }
 
     fn grid_layout(
         ui: &egui::Ui,
         item_count: usize,
         cell_width: f32,
-        row_height: f32,
+        row_step: f32,
         max_height: f32,
     ) -> (usize, usize) {
         if item_count == 0 {
@@ -581,18 +668,40 @@ impl InspectorPanel {
         // If scrolling is needed, available inner width shrinks by the scrollbar.
         // Recompute columns so row math (including reveal-scroll rows) matches
         // what is actually visible after panel resize.
-        let scrollbar_width = ui.spacing().scroll.bar_width;
+        let scrollbar_width = ui.spacing().scroll.allocated_width();
         let width_with_scrollbar = (base_width - scrollbar_width).max(cell_width);
         let columns_with_scrollbar = (width_with_scrollbar / cell_width).floor().max(1.0) as usize;
 
         let mut row_count = item_count.div_ceil(columns);
-        let needs_scroll = (row_count as f32 * row_height) > max_height;
+        let needs_scroll = (row_count as f32 * row_step) > max_height;
         if needs_scroll && columns_with_scrollbar != columns {
             columns = columns_with_scrollbar;
             row_count = item_count.div_ceil(columns);
         }
 
         (columns, row_count)
+    }
+
+    fn reveal_scroll_offset(
+        target_row: usize,
+        row_step: f32,
+        row_count: usize,
+        viewport_height: f32,
+    ) -> f32 {
+        if row_count == 0 || row_step <= 0.0 || viewport_height <= 0.0 {
+            return 0.0;
+        }
+
+        let content_height = row_count as f32 * row_step;
+        let max_offset = (content_height - viewport_height).max(0.0);
+        if max_offset <= 0.0 {
+            return 0.0;
+        }
+
+        // Keep reveal behavior deterministic: place the target in the first
+        // visible row whenever possible.
+        let target_top = target_row as f32 * row_step;
+        target_top.clamp(0.0, max_offset)
     }
 
     /// Section header: bold label.

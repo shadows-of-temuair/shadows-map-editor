@@ -5,6 +5,7 @@ mod status_bar;
 mod tab_bar;
 mod title_bar;
 mod toolbar;
+mod unsaved_changes_dialog;
 mod viewport;
 mod window_frame;
 
@@ -15,5 +16,6 @@ pub use status_bar::{StatusBarAction, StatusBarPanel};
 pub use tab_bar::{TabBarAction, TabBarPanel};
 pub use title_bar::TitleBarPanel;
 pub use toolbar::{Tool, ToolbarAction, ToolbarPanel};
+pub use unsaved_changes_dialog::{UnsavedChangesDialog, UnsavedChangesDialogAction};
 pub use viewport::{EyedropperPick, ViewportPanel};
 pub use window_frame::WindowFrame;

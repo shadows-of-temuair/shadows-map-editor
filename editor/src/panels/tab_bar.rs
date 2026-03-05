@@ -2,6 +2,7 @@ use eframe::egui;
 
 use crate::document::MapDocument;
 use crate::theme::{ThemeColors, theme_colors};
+use crate::widgets::tooltip;
 
 const TAB_BAR_HEIGHT: f32 = 32.0;
 const NAV_BUTTON_WIDTH: f32 = 24.0;
@@ -132,7 +133,7 @@ impl TabBarPanel {
 
     /// Measure the width a tab would occupy.
     fn measure_tab_width(ui: &egui::Ui, doc: &MapDocument, is_active: bool) -> f32 {
-        let name = doc.display_name();
+        let name = doc.tab_display_name();
         let label = if doc.dirty { format!("{name} *") } else { name };
 
         let text_color = if is_active {
@@ -151,7 +152,7 @@ impl TabBarPanel {
 
     /// Rough tab width estimate without painter access (for ensure_tab_visible).
     fn estimate_tab_width(doc: &MapDocument, _is_active: bool) -> f32 {
-        let name = doc.display_name();
+        let name = doc.tab_display_name();
         let chars = if doc.dirty {
             name.len() + 2
         } else {
@@ -204,7 +205,7 @@ impl TabBarPanel {
     ) -> TabBarAction {
         let mut action = TabBarAction::None;
 
-        let name = doc.display_name();
+        let name = doc.tab_display_name();
         let label = if doc.dirty { format!("{name} *") } else { name };
 
         let bg = if is_active {
@@ -225,8 +226,13 @@ impl TabBarPanel {
         let tab_width = h_pad + text_width + 6.0 + close_width + 6.0;
 
         // Allocate the tab rect
-        let (tab_rect, tab_response) =
+        let (tab_rect, tab_response_raw) =
             ui.allocate_exact_size(egui::vec2(tab_width, TAB_BAR_HEIGHT), egui::Sense::click());
+        let tab_response = if let Some(filename) = Self::named_map_filename(doc) {
+            tooltip::attach(tab_response_raw, filename)
+        } else {
+            tab_response_raw
+        };
 
         let painter = ui.painter();
 
@@ -299,5 +305,17 @@ impl TabBarPanel {
         }
 
         action
+    }
+
+    fn named_map_filename(doc: &MapDocument) -> Option<String> {
+        if doc.map_name_hint.is_none() {
+            return None;
+        }
+
+        doc.path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .map(ToOwned::to_owned)
     }
 }

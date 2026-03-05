@@ -163,15 +163,6 @@ impl MapDocument {
         })
     }
 
-    pub fn save(&mut self) -> std::io::Result<()> {
-        self.finish_stroke();
-        if let Some(ref path) = self.path {
-            self.map.save(path)?;
-            self.dirty = false;
-        }
-        Ok(())
-    }
-
     pub fn save_as(&mut self, path: PathBuf) -> std::io::Result<()> {
         self.finish_stroke();
         self.map.save(&path)?;
@@ -218,6 +209,14 @@ impl MapDocument {
             if let Some(map_id) = self.map_id_hint {
                 return format!("{map_id} - {name}");
             }
+            return name.clone();
+        }
+
+        self.tab_display_name()
+    }
+
+    pub fn tab_display_name(&self) -> String {
+        if let Some(name) = &self.map_name_hint {
             return name.clone();
         }
 

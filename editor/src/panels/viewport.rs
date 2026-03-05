@@ -4,6 +4,7 @@ use super::toolbar::Tool;
 use crate::document::{Camera, LayerVisibility, PaintLayer};
 use crate::shape::{self, ShapeKind};
 use crate::theme::{ThemeColors, theme_colors};
+use crate::widgets::tooltip;
 
 /// Returns true if a wall tile ID should be rendered.
 ///
@@ -81,17 +82,18 @@ impl ViewportPanel {
                     ui.id().with("viewport"),
                     egui::Sense::click_and_drag(),
                 );
+                let mut cursor_icon = if response.hovered() {
+                    Some(egui::CursorIcon::Default)
+                } else {
+                    None
+                };
 
                 // Right-click or middle-click drag panning
-                let is_panning = response.dragged_by(egui::PointerButton::Secondary)
+                let is_mouse_panning = response.dragged_by(egui::PointerButton::Secondary)
                     || response.dragged_by(egui::PointerButton::Middle);
-                if is_panning {
+                if is_mouse_panning {
                     camera.offset -= response.drag_delta();
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                } else if response.hovered() {
-                    // Prevent cursor icon from getting "stuck" when switching
-                    // away from crosshair-based tools.
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+                    cursor_icon = Some(egui::CursorIcon::Grabbing);
                 }
 
                 // Mouse wheel zoom (only when the viewport is hovered).
@@ -182,7 +184,7 @@ impl ViewportPanel {
 
                             match active_tool {
                                 Tool::Pencil if selected_paint_tile != 0 => {
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                                    cursor_icon = Some(egui::CursorIcon::Crosshair);
                                     Self::draw_paint_preview(
                                         &painter,
                                         col,
@@ -214,7 +216,7 @@ impl ViewportPanel {
                                     }
                                 }
                                 Tool::Line if selected_paint_tile != 0 => {
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                                    cursor_icon = Some(egui::CursorIcon::Crosshair);
                                     if let Some(start) = line_preview_start {
                                         Self::draw_paint_line_preview(
                                             &painter,
@@ -252,7 +254,7 @@ impl ViewportPanel {
                                     }
                                 }
                                 Tool::Shape if selected_paint_tile != 0 => {
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                                    cursor_icon = Some(egui::CursorIcon::Crosshair);
                                     if let Some(start) = shape_preview_start {
                                         Self::draw_paint_shape_preview(
                                             &painter,
@@ -292,7 +294,7 @@ impl ViewportPanel {
                                     }
                                 }
                                 Tool::Fill if selected_paint_tile != 0 => {
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                                    cursor_icon = Some(egui::CursorIcon::Crosshair);
                                     Self::draw_paint_preview(
                                         &painter,
                                         col,
@@ -314,7 +316,7 @@ impl ViewportPanel {
                                     }
                                 }
                                 Tool::Eyedropper => {
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                                    cursor_icon = Some(egui::CursorIcon::Crosshair);
                                     let idx = row as usize * map.width as usize + col as usize;
                                     let tile = &map.tiles[idx];
                                     let shift_held = ui.input(|i| i.modifiers.shift);
@@ -375,7 +377,7 @@ impl ViewportPanel {
                                     }
                                 }
                                 Tool::Eraser => {
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                                    cursor_icon = Some(egui::CursorIcon::Crosshair);
                                     Self::draw_erase_preview(
                                         &painter, col, row, origin, half_w, half_h,
                                     );
@@ -399,6 +401,13 @@ impl ViewportPanel {
                             );
                         }
                     }
+                }
+
+                if is_mouse_panning {
+                    cursor_icon = Some(egui::CursorIcon::Grabbing);
+                }
+                if let Some(cursor_icon) = cursor_icon {
+                    ui.ctx().set_cursor_icon(cursor_icon);
                 }
 
                 // Floating overlay: Grid | Tab | G L R
@@ -720,7 +729,7 @@ impl ViewportPanel {
             *enabled = !*enabled;
         }
 
-        response.on_hover_text(tooltip);
+        let _ = tooltip::attach(response, tooltip);
     }
 
     fn overlay_rect(viewport_rect: egui::Rect) -> egui::Rect {

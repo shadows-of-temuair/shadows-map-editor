@@ -98,16 +98,17 @@ If `maps.ron` exists in the project root, the editor uses it as map metadata:
 
 ### Editing
 
-- **B** — Switch to Pencil tool
+- **B** — Switch to Brush tool
 - **L** — Switch to Line tool
 - **E** — Switch to Eraser tool
 - **G** — Switch to Fill tool
 - **I** — Switch to Eyedropper tool
-- **R** — Switch to Shape tool
+- **U** — Switch to Shape tool
+- **T** — Toggle tile paint layer between Ground and Wall (preserves the current wall side)
 - **Q** — Toggle wall paint target side (Left/Right) while in Wall mode
-- **Left click (Pencil)** — Paint the hovered tile
-- **Left drag (Pencil)** — Paint continuously while holding the mouse button
-- **Shift+Left click (Pencil)** — Draw a line from the last pencil click to the clicked tile (does nothing if there is no previous pencil click)
+- **Left click (Brush)** — Paint the hovered tile
+- **Left drag (Brush)** — Paint continuously while holding the mouse button
+- **Shift+Left click (Brush)** — Draw a line from the last brush click to the clicked tile (does nothing if there is no previous brush click)
 - **Left click (Line)** — First click sets the line start, next click paints a line to that point (live preview shown while hovering)
 - **Left click (Shape)** — First click sets shape start, next click draws outline to that point (live preview shown while hovering)
 - **Shape dropdown (toolbar)** — Choose `Rect`, `Square`, `Circle`, or `Triangle` (last selected shape icon is shown on the button)

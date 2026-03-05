@@ -8,11 +8,22 @@ use crate::map_list::{MapList, MapMetadataHint};
 use crate::palette_lookup::LoadedPaletteLookup;
 use crate::panels::{
     ExportDialog, ExportDialogAction, EyedropperPick, InspectorPanel, MapSizeDialog,
-    StatusBarAction, StatusBarPanel, TabBarAction, TabBarPanel, TitleBarPanel, Tool, ToolbarAction,
-    ToolbarPanel, ViewportPanel, WindowFrame,
+    StatusBarAction, StatusBarPanel, TabBarAction, TabBarPanel, TitleBarPanel, Tool,
+    ToolbarAction, ToolbarPanel, UnsavedChangesDialog, UnsavedChangesDialogAction, ViewportPanel,
+    WindowFrame,
 };
 use crate::shape::{self, ShapeKind};
 use crate::theme;
+
+enum PendingDiscardAction {
+    CloseTab { index: usize },
+    CloseWindow { remaining_docs: Vec<usize> },
+}
+
+struct PendingUnsavedChanges {
+    document_index: usize,
+    action: PendingDiscardAction,
+}
 
 pub struct EditorApp {
     documents: Vec<MapDocument>,
@@ -20,6 +31,7 @@ pub struct EditorApp {
     active_tool: Tool,
     active_shape_kind: ShapeKind,
     active_paint_layer: PaintLayer,
+    last_wall_paint_layer: PaintLayer,
     tab_bar: TabBarPanel,
     status_bar: StatusBarPanel,
     layer_visibility: LayerVisibility,
@@ -43,6 +55,8 @@ pub struct EditorApp {
     shape_tool_start_tile: Option<(u16, u16)>,
     export_dialog: ExportDialog,
     new_map_size_dialog: MapSizeDialog,
+    unsaved_changes_dialog: UnsavedChangesDialog,
+    pending_unsaved_changes: Option<PendingUnsavedChanges>,
     status_message: String,
     atlas_needs_upload: bool,
     wall_atlas_needs_upload: bool,
@@ -51,6 +65,7 @@ pub struct EditorApp {
 
 impl EditorApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        crate::widgets::icons::install_font(&cc.egui_ctx);
         theme::apply_theme(&cc.egui_ctx);
 
         // Build atlases CPU-side; texture uploads are deferred to first frame
@@ -73,6 +88,7 @@ impl EditorApp {
             active_tool: Tool::Pencil,
             active_shape_kind: ShapeKind::Rect,
             active_paint_layer: PaintLayer::Ground,
+            last_wall_paint_layer: PaintLayer::LeftWall,
             tab_bar: TabBarPanel::default(),
             status_bar: StatusBarPanel::default(),
             layer_visibility: LayerVisibility::default(),
@@ -98,6 +114,8 @@ impl EditorApp {
             shape_tool_start_tile: None,
             export_dialog: ExportDialog::default(),
             new_map_size_dialog: MapSizeDialog::default(),
+            unsaved_changes_dialog: UnsavedChangesDialog::default(),
+            pending_unsaved_changes: None,
             status_message: String::from("Ready"),
             tab_overlay_texture_needs_upload: true,
         }
@@ -128,6 +146,9 @@ impl EditorApp {
             return;
         }
         self.documents[self.active_tab].finish_stroke();
+        if matches!(layer, PaintLayer::LeftWall | PaintLayer::RightWall) {
+            self.last_wall_paint_layer = layer;
+        }
         self.active_paint_layer = layer;
         self.clear_edit_anchors();
     }
@@ -513,10 +534,13 @@ impl EditorApp {
         }
     }
 
-    fn save_document(&mut self) {
-        self.documents[self.active_tab].finish_stroke();
-        let Some(path) = self.prompt_save_path_for_active_document() else {
-            return;
+    fn save_document_at(&mut self, index: usize) -> bool {
+        let Some(doc) = self.documents.get_mut(index) else {
+            return false;
+        };
+        doc.finish_stroke();
+        let Some(path) = self.prompt_save_path_for_document(index) else {
+            return false;
         };
 
         let filename = path
@@ -525,47 +549,31 @@ impl EditorApp {
             .unwrap_or("map")
             .to_owned();
 
-        self.documents[self.active_tab].path = Some(path.clone());
-        match self.documents[self.active_tab].save() {
+        match self.documents[index].save_as(path.clone()) {
             Ok(()) => {
-                self.documents[self.active_tab].clear_history();
+                self.documents[index].clear_history();
                 info!("Saved map: {}", path.display());
                 self.status_message = format!("Saved {}.", filename);
+                true
             }
             Err(e) => {
                 warn!("Failed to save {}: {}", path.display(), e);
                 self.status_message = format!("Save failed: {}", e);
+                false
             }
         }
+    }
+
+    fn save_document(&mut self) {
+        let _ = self.save_document_at(self.active_tab);
     }
 
     fn save_document_as(&mut self) {
-        self.documents[self.active_tab].finish_stroke();
-        let Some(path) = self.prompt_save_path_for_active_document() else {
-            return;
-        };
-
-        let filename = path
-            .file_name()
-            .and_then(|f| f.to_str())
-            .unwrap_or("map")
-            .to_owned();
-
-        match self.documents[self.active_tab].save_as(path.clone()) {
-            Ok(()) => {
-                self.documents[self.active_tab].clear_history();
-                info!("Saved map as: {}", path.display());
-                self.status_message = format!("Saved {}.", filename);
-            }
-            Err(e) => {
-                warn!("Failed to save as {}: {}", path.display(), e);
-                self.status_message = format!("Save failed: {}", e);
-            }
-        }
+        let _ = self.save_document_at(self.active_tab);
     }
 
-    fn prompt_save_path_for_active_document(&self) -> Option<PathBuf> {
-        let doc = &self.documents[self.active_tab];
+    fn prompt_save_path_for_document(&self, index: usize) -> Option<PathBuf> {
+        let doc = &self.documents[index];
         let suggested = Self::suggested_map_filename(doc);
 
         let mut dialog = rfd::FileDialog::new()
@@ -615,6 +623,18 @@ impl EditorApp {
     }
 
     fn close_tab(&mut self, index: usize) {
+        if self.pending_unsaved_changes.is_some() || index >= self.documents.len() {
+            return;
+        }
+        self.documents[index].finish_stroke();
+        if self.documents[index].dirty {
+            self.begin_unsaved_changes_flow(PendingDiscardAction::CloseTab { index }, index);
+            return;
+        }
+        self.close_tab_now(index);
+    }
+
+    fn close_tab_now(&mut self, index: usize) {
         self.documents[self.active_tab].finish_stroke();
         if self.documents.len() <= 1 {
             // Don't close the last tab — replace with a fresh document
@@ -631,6 +651,109 @@ impl EditorApp {
             self.active_tab = self.documents.len() - 1;
         }
         self.clear_edit_anchors();
+    }
+
+    fn begin_unsaved_changes_flow(
+        &mut self,
+        action: PendingDiscardAction,
+        document_index: usize,
+    ) {
+        let Some(doc) = self.documents.get(document_index) else {
+            return;
+        };
+        self.unsaved_changes_dialog
+            .open_for(&doc.tab_display_name());
+        self.pending_unsaved_changes = Some(PendingUnsavedChanges {
+            document_index,
+            action,
+        });
+    }
+
+    fn dirty_document_indices_for_window_close(&mut self) -> Vec<usize> {
+        self.documents[self.active_tab].finish_stroke();
+
+        let mut dirty_docs = Vec::new();
+        if self.documents[self.active_tab].dirty {
+            dirty_docs.push(self.active_tab);
+        }
+        dirty_docs.extend(
+            self.documents
+                .iter()
+                .enumerate()
+                .filter(|(index, doc)| *index != self.active_tab && doc.dirty)
+                .map(|(index, _)| index),
+        );
+        dirty_docs
+    }
+
+    fn request_window_close(&mut self, ctx: &egui::Context) {
+        if self.pending_unsaved_changes.is_some() || self.unsaved_changes_dialog.is_open() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            return;
+        }
+
+        let dirty_docs = self.dirty_document_indices_for_window_close();
+        if dirty_docs.is_empty() {
+            return;
+        }
+
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        self.begin_unsaved_changes_flow(
+            PendingDiscardAction::CloseWindow {
+                remaining_docs: dirty_docs.clone(),
+            },
+            dirty_docs[0],
+        );
+    }
+
+    fn resolve_unsaved_changes_action(
+        &mut self,
+        ctx: &egui::Context,
+        action: UnsavedChangesDialogAction,
+    ) {
+        match action {
+            UnsavedChangesDialogAction::None => {}
+            UnsavedChangesDialogAction::Cancel => {
+                self.pending_unsaved_changes = None;
+            }
+            UnsavedChangesDialogAction::Save => {
+                let Some(pending) = self.pending_unsaved_changes.take() else {
+                    return;
+                };
+                if self.save_document_at(pending.document_index) {
+                    self.advance_pending_discard_action(ctx, pending);
+                }
+            }
+            UnsavedChangesDialogAction::Discard => {
+                let Some(pending) = self.pending_unsaved_changes.take() else {
+                    return;
+                };
+                self.advance_pending_discard_action(ctx, pending);
+            }
+        }
+    }
+
+    fn advance_pending_discard_action(
+        &mut self,
+        ctx: &egui::Context,
+        pending: PendingUnsavedChanges,
+    ) {
+        match pending.action {
+            PendingDiscardAction::CloseTab { index } => {
+                self.close_tab_now(index);
+            }
+            PendingDiscardAction::CloseWindow { mut remaining_docs } => {
+                remaining_docs.retain(|&index| index != pending.document_index);
+                if let Some(&next_index) = remaining_docs.first() {
+                    self.begin_unsaved_changes_flow(
+                        PendingDiscardAction::CloseWindow { remaining_docs },
+                        next_index,
+                    );
+                } else {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
     }
 
     fn undo_active_document(&mut self) {
@@ -787,6 +910,7 @@ impl EditorApp {
             redo,
             export,
             tool,
+            toggle_ground_wall_layer,
             toggle_wall_target_side,
             toggle_layer,
             toggle_tab_overlay,
@@ -806,7 +930,7 @@ impl EditorApp {
                     Some(Tool::Fill)
                 } else if i.key_pressed(egui::Key::L) {
                     Some(Tool::Line)
-                } else if i.key_pressed(egui::Key::R) {
+                } else if i.key_pressed(egui::Key::U) {
                     Some(Tool::Shape)
                 } else if i.key_pressed(egui::Key::E) {
                     Some(Tool::Eraser)
@@ -818,6 +942,9 @@ impl EditorApp {
             } else {
                 None
             };
+
+            // Paint layer toggle (T): ground <-> remembered wall side.
+            let toggle_ground_wall_layer = !cmd && !shift && i.key_pressed(egui::Key::T);
 
             // Wall target toggle (Q): left <-> right when in wall mode.
             let toggle_wall_target_side = !cmd && !shift && i.key_pressed(egui::Key::Q);
@@ -870,6 +997,7 @@ impl EditorApp {
                 redo,
                 cmd && i.key_pressed(egui::Key::E),
                 tool,
+                toggle_ground_wall_layer,
                 toggle_wall_target_side,
                 toggle_layer,
                 toggle_tab_overlay,
@@ -880,6 +1008,22 @@ impl EditorApp {
 
         if let Some(t) = tool {
             self.set_active_tool(t);
+        }
+        if toggle_ground_wall_layer {
+            match self.active_paint_layer {
+                PaintLayer::Ground => {
+                    self.set_active_paint_layer(self.last_wall_paint_layer);
+                    self.status_message = match self.active_paint_layer {
+                        PaintLayer::LeftWall => "Paint layer: Wall (Left).".to_string(),
+                        PaintLayer::RightWall => "Paint layer: Wall (Right).".to_string(),
+                        PaintLayer::Ground => unreachable!(),
+                    };
+                }
+                PaintLayer::LeftWall | PaintLayer::RightWall => {
+                    self.set_active_paint_layer(PaintLayer::Ground);
+                    self.status_message = "Paint layer: Ground.".to_string();
+                }
+            }
         }
         if toggle_wall_target_side {
             match self.active_paint_layer {
@@ -1015,10 +1159,16 @@ impl eframe::App for EditorApp {
         self.try_upload_wall_atlas(ctx);
         self.try_upload_tab_overlay_texture(ctx);
 
+        if ctx.input(|i| i.viewport().close_requested()) {
+            self.request_window_close(ctx);
+        }
+
         WindowFrame::show(ctx);
 
-        self.handle_keyboard_shortcuts(ctx);
-        self.handle_dropped_files(ctx);
+        if !self.unsaved_changes_dialog.is_open() {
+            self.handle_keyboard_shortcuts(ctx);
+            self.handle_dropped_files(ctx);
+        }
 
         TitleBarPanel::show(ctx, frame);
 
@@ -1332,5 +1482,8 @@ impl eframe::App for EditorApp {
         if !primary_down {
             doc.finish_stroke();
         }
+
+        let unsaved_changes_action = self.unsaved_changes_dialog.show(ctx);
+        self.resolve_unsaved_changes_action(ctx, unsaved_changes_action);
     }
 }
