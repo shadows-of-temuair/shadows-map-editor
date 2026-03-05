@@ -27,6 +27,7 @@ pub struct EditorApp {
     hover_tile: (u16, u16),
     selected_tile: Option<(u16, u16)>,
     selected_ground_tile: u16,
+    last_pencil_click_tile: Option<(u16, u16)>,
     export_dialog: ExportDialog,
     status_message: String,
     atlas_needs_upload: bool,
@@ -59,6 +60,7 @@ impl EditorApp {
             hover_tile: (0, 0),
             selected_tile: None,
             selected_ground_tile,
+            last_pencil_click_tile: None,
             export_dialog: ExportDialog::default(),
             status_message: String::from("Ready"),
         }
@@ -336,6 +338,7 @@ impl EditorApp {
     fn new_document(&mut self) {
         self.documents.push(MapDocument::new(50, 50));
         self.active_tab = self.documents.len() - 1;
+        self.last_pencil_click_tile = None;
     }
 
     fn open_document(&mut self) {
@@ -348,6 +351,7 @@ impl EditorApp {
             for (i, doc) in self.documents.iter().enumerate() {
                 if doc.path.as_ref() == Some(&path) {
                     self.active_tab = i;
+                    self.last_pencil_click_tile = None;
                     return;
                 }
             }
@@ -356,6 +360,7 @@ impl EditorApp {
                 Ok(doc) => {
                     self.documents.push(doc);
                     self.active_tab = self.documents.len() - 1;
+                    self.last_pencil_click_tile = None;
                     info!("Opened map: {}", path.display());
                 }
                 Err(e) => {
@@ -467,6 +472,7 @@ impl EditorApp {
             // Don't close the last tab — replace with a fresh document
             self.documents[0] = MapDocument::new(50, 50);
             self.active_tab = 0;
+            self.last_pencil_click_tile = None;
             return;
         }
 
@@ -476,6 +482,63 @@ impl EditorApp {
         } else if self.active_tab >= self.documents.len() {
             self.active_tab = self.documents.len() - 1;
         }
+        self.last_pencil_click_tile = None;
+    }
+
+    fn paint_ground_tile(
+        doc: &mut MapDocument,
+        selected_ground_tile: u16,
+        col: u16,
+        row: u16,
+    ) -> bool {
+        let idx = row as usize * doc.map.width as usize + col as usize;
+        if let Some(tile) = doc.map.tiles.get_mut(idx) {
+            if tile.ground != selected_ground_tile {
+                tile.ground = selected_ground_tile;
+                doc.dirty = true;
+                return true;
+            }
+        }
+        false
+    }
+
+    fn paint_ground_line(
+        doc: &mut MapDocument,
+        selected_ground_tile: u16,
+        start: (u16, u16),
+        end: (u16, u16),
+    ) -> bool {
+        let (mut x0, mut y0) = (start.0 as i32, start.1 as i32);
+        let (x1, y1) = (end.0 as i32, end.1 as i32);
+
+        let dx = (x1 - x0).abs();
+        let sx = if x0 < x1 { 1 } else { -1 };
+        let dy = -(y1 - y0).abs();
+        let sy = if y0 < y1 { 1 } else { -1 };
+        let mut err = dx + dy;
+
+        let mut changed = false;
+        loop {
+            if x0 >= 0 && y0 >= 0 {
+                changed |= Self::paint_ground_tile(doc, selected_ground_tile, x0 as u16, y0 as u16);
+            }
+
+            if x0 == x1 && y0 == y1 {
+                break;
+            }
+
+            let e2 = 2 * err;
+            if e2 >= dy {
+                err += dy;
+                x0 += sx;
+            }
+            if e2 <= dx {
+                err += dx;
+                y0 += sy;
+            }
+        }
+
+        changed
     }
 
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
@@ -614,12 +677,14 @@ impl EditorApp {
                     .position(|doc| doc.path.as_ref() == Some(&path));
                 if let Some(i) = already_open {
                     self.active_tab = i;
+                    self.last_pencil_click_tile = None;
                     continue;
                 }
                 match MapDocument::open(path.clone()) {
                     Ok(doc) => {
                         self.documents.push(doc);
                         self.active_tab = self.documents.len() - 1;
+                        self.last_pencil_click_tile = None;
                         info!("Opened dropped map: {}", path.display());
                     }
                     Err(e) => {
@@ -669,6 +734,7 @@ impl eframe::App for EditorApp {
             TabBarAction::CloseTab(i) => self.close_tab(i),
             TabBarAction::SwitchTab(i) => {
                 self.active_tab = i;
+                self.last_pencil_click_tile = None;
                 self.tab_bar.ensure_tab_visible(&self.documents, i);
             }
             TabBarAction::None => {}
@@ -807,14 +873,18 @@ impl eframe::App for EditorApp {
         if let Some(tile) = vp_result.clicked_tile {
             self.selected_tile = Some(tile);
         }
-        if let Some((col, row)) = vp_result.painted_tile {
-            let idx = row as usize * doc.map.width as usize + col as usize;
-            if let Some(tile) = doc.map.tiles.get_mut(idx) {
-                if tile.ground != self.selected_ground_tile {
-                    tile.ground = self.selected_ground_tile;
-                    doc.dirty = true;
+        if self.active_tool == Tool::Pencil {
+            if let Some(end) = vp_result.pencil_shift_clicked_tile {
+                if let Some(start) = self.last_pencil_click_tile {
+                    Self::paint_ground_line(doc, self.selected_ground_tile, start, end);
+                    self.last_pencil_click_tile = Some(end);
                 }
+            } else if let Some(point) = vp_result.pencil_clicked_tile {
+                self.last_pencil_click_tile = Some(point);
             }
+        }
+        if let Some((col, row)) = vp_result.painted_tile {
+            Self::paint_ground_tile(doc, self.selected_ground_tile, col, row);
         }
     }
 }

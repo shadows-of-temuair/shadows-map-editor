@@ -2,7 +2,7 @@ use eframe::egui;
 
 use super::toolbar::Tool;
 use crate::document::{Camera, LayerVisibility};
-use crate::theme::{ThemeColors, theme_colors};
+use crate::theme::{theme_colors, ThemeColors};
 
 /// Returns true if a wall tile ID should be rendered.
 ///
@@ -21,6 +21,8 @@ pub struct ViewportResult {
     pub hover_tile: Option<(u16, u16)>,
     pub clicked_tile: Option<(u16, u16)>,
     pub painted_tile: Option<(u16, u16)>,
+    pub pencil_clicked_tile: Option<(u16, u16)>,
+    pub pencil_shift_clicked_tile: Option<(u16, u16)>,
 }
 
 pub struct ViewportPanel;
@@ -142,11 +144,19 @@ impl ViewportPanel {
                                     atlas_texture,
                                     selected_ground_tile,
                                 );
+                                let shift_held = ui.input(|i| i.modifiers.shift);
+                                if response.clicked_by(egui::PointerButton::Primary) {
+                                    if shift_held {
+                                        result.pencil_shift_clicked_tile = Some((col, row));
+                                    } else {
+                                        result.pencil_clicked_tile = Some((col, row));
+                                    }
+                                }
                                 let is_primary_painting = response.is_pointer_button_down_on()
                                     && ui.input(|i| {
                                         i.pointer.button_down(egui::PointerButton::Primary)
                                     });
-                                if is_primary_painting {
+                                if is_primary_painting && !shift_held {
                                     result.painted_tile = Some((col, row));
                                 }
                             } else if response.clicked_by(egui::PointerButton::Primary) {
