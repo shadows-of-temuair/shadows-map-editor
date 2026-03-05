@@ -7,7 +7,7 @@ Supports both:
 - Legacy single-palette rendering (`legend.pal`)
 - Newer palette-table rendering (`mpt*` / `stc*` `.tbl` + `.pal`)
 
-**This is a work in progress. Currently only allows viewing and exporting maps.**
+**This is a work in progress with map viewing, editing, and export support.**
 
 ![Screenshot](screenshot.png)
 
@@ -71,8 +71,13 @@ cargo run --release
 
 - **Cmd+O** — Open a `.map` file via file dialog
 - **Drag and drop** — Drop `.map` files directly onto the window to open them
-- **Cmd+N** — New blank 50x50 map
+- **Cmd+N** — Open the New Map size dialog and create a new map
 - **Cmd+W** — Close the active tab
+
+If `maps.ron` exists in the project root, the editor uses it as map metadata:
+- matches the map number from the filename (e.g. `LOD185.MAP` → `185`)
+- applies the listed map name as the tab title
+- applies the listed dimensions when `width * height` matches the file tile count
 
 ### Viewport
 
@@ -88,6 +93,27 @@ cargo run --release
 - **Cmd+3** — Toggle right walls
 - **Cmd+4** — Toggle grid overlay
 
+### Editing
+
+- **B** — Switch to Pencil tool
+- **L** — Switch to Line tool
+- **E** — Switch to Eraser tool
+- **G** — Switch to Fill tool
+- **I** — Switch to Eyedropper tool
+- **R** — Switch to Shape tool
+- **Left click (Pencil)** — Paint the hovered tile
+- **Left drag (Pencil)** — Paint continuously while holding the mouse button
+- **Shift+Left click (Pencil)** — Draw a line from the last pencil click to the clicked tile (does nothing if there is no previous pencil click)
+- **Left click (Line)** — First click sets the line start, next click paints a line to that point (live preview shown while hovering)
+- **Left click (Shape)** — First click sets shape start, next click draws outline to that point (live preview shown while hovering)
+- **Shape dropdown (toolbar)** — Choose `Rect`, `Square`, `Circle`, or `Triangle` (last selected shape icon is shown on the button)
+- **Esc** or **Right click (Line/Shape)** — Cancel the pending start point
+- **Left click/drag (Eraser)** — Clear ground tiles (writes tile ID `0`)
+- **Left click (Fill)** — Flood-fill contiguous ground region with the selected ground tile
+- **Left click (Eyedropper)** — Pick the hovered ground tile
+- **Shift+Left click (Eyedropper)** — Pick hovered wall tile (left/right wall chosen by cursor side)
+- **Alt/Option (hold)** — Temporarily use Eyedropper while held (supports the same Shift behavior)
+
 ### Export
 
 - **Cmd+E** — Open the export dialog
@@ -98,6 +124,12 @@ cargo run --release
 ### Map Dimensions
 
 The status bar shows the current map dimensions. Click the dimension label to choose from all valid factor pairs for the tile count — useful for maps where the original width/height is ambiguous.
+The size menu also includes **Custom Size...** to enter explicit `width x height` values (each from `1` to `65535`).
+When reducing total tile count in **Custom Size...**, the dialog shows a warning that data will be truncated.
+
+### Status Bar
+
+The active file name is shown in the status bar next to zoom controls so it is always visible without hovering tabs.
 
 ## Project Structure
 

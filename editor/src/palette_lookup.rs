@@ -69,11 +69,11 @@ fn parse_table_line(line: &str) -> Option<TableLine> {
 
             if palette_or_override < 0 {
                 // -1/-2 are DALib gender-specific overrides, not used by map
-                // assets; ignore those lines for now.
+                // assets; ignore these entries.
                 return None;
             }
-            let palette = palette_or_override as u32;
 
+            let palette = palette_or_override as u32;
             if end_or_palette < start {
                 return None;
             }
@@ -132,9 +132,9 @@ pub struct LoadedPaletteLookup {
 }
 
 impl LoadedPaletteLookup {
-    /// Attempts to load a palette-table lookup by prefix (e.g. `mpt`, `stc`).
+    /// Attempts to load a palette-table lookup by prefix (e.g. `mpt`).
     ///
-    /// Returns `None` if no usable table/palette set is found.
+    /// Returns `None` when no usable table/palette set is found.
     pub fn from_pool(pool: &AssetPool, prefix: &str) -> Option<Self> {
         let table_names = collect_matching_names(pool, prefix, ".tbl");
         if table_names.is_empty() {
@@ -164,7 +164,6 @@ impl LoadedPaletteLookup {
             let Some(bytes) = pool.get(name) else {
                 continue;
             };
-
             match Palette::from_bytes(bytes) {
                 Ok(palette) => {
                     palettes.insert(palette_id, palette);

@@ -1,22 +1,26 @@
-use std::path::PathBuf;
+use std::{collections::VecDeque, path::PathBuf};
 
 use eframe::egui;
 use tracing::{info, warn};
 
 use crate::document::{LayerVisibility, MapDocument};
+use crate::map_list::{MapList, MapMetadataHint};
 use crate::palette_lookup::LoadedPaletteLookup;
 use crate::panels::{
-    ExportDialog, ExportDialogAction, InspectorPanel, StatusBarAction, StatusBarPanel,
-    TabBarAction, TabBarPanel, TitleBarPanel, Tool, ToolbarAction, ToolbarPanel, ViewportPanel,
-    WindowFrame,
+    ExportDialog, ExportDialogAction, EyedropperPick, InspectorPanel, MapSizeDialog,
+    StatusBarAction, StatusBarPanel, TabBarAction, TabBarPanel, TitleBarPanel, Tool, ToolbarAction,
+    ToolbarPanel, ViewportPanel, WindowFrame,
 };
+use crate::shape::{self, ShapeKind};
 use crate::theme;
 
 pub struct EditorApp {
     documents: Vec<MapDocument>,
     active_tab: usize,
     active_tool: Tool,
+    active_shape_kind: ShapeKind,
     tab_bar: TabBarPanel,
+    status_bar: StatusBarPanel,
     layer_visibility: LayerVisibility,
     show_grid: bool,
     tile_atlas: Option<render::TileAtlas>,
@@ -24,9 +28,17 @@ pub struct EditorApp {
     wall_atlas: Option<render::SpriteAtlas>,
     wall_texture: Option<egui::TextureHandle>,
     sotp_data: Option<Vec<u8>>,
+    map_list: Option<MapList>,
     hover_tile: (u16, u16),
     selected_tile: Option<(u16, u16)>,
+    selected_ground_tile: u16,
+    selected_left_wall_tile: u16,
+    selected_right_wall_tile: u16,
+    last_pencil_click_tile: Option<(u16, u16)>,
+    line_tool_start_tile: Option<(u16, u16)>,
+    shape_tool_start_tile: Option<(u16, u16)>,
     export_dialog: ExportDialog,
+    new_map_size_dialog: MapSizeDialog,
     status_message: String,
     atlas_needs_upload: bool,
     wall_atlas_needs_upload: bool,
@@ -39,12 +51,16 @@ impl EditorApp {
         // Build atlases CPU-side; texture uploads are deferred to first frame
         // because the renderer hasn't reported the real GPU max texture size yet.
         let (tile_atlas, wall_atlas, sotp_data) = Self::load_assets();
+        let map_list = MapList::load_if_exists("maps.ron");
+        let selected_ground_tile = if tile_atlas.is_some() { 1 } else { 0 };
 
         Self {
             documents: vec![MapDocument::new(50, 50)],
             active_tab: 0,
-            active_tool: Tool::Select,
+            active_tool: Tool::Pencil,
+            active_shape_kind: ShapeKind::Rect,
             tab_bar: TabBarPanel::default(),
+            status_bar: StatusBarPanel::default(),
             layer_visibility: LayerVisibility::default(),
             show_grid: true,
             atlas_needs_upload: tile_atlas.is_some(),
@@ -52,12 +68,40 @@ impl EditorApp {
             tile_atlas,
             wall_atlas,
             sotp_data,
+            map_list,
             atlas_texture: None,
             wall_texture: None,
             hover_tile: (0, 0),
             selected_tile: None,
+            selected_ground_tile,
+            selected_left_wall_tile: 0,
+            selected_right_wall_tile: 0,
+            last_pencil_click_tile: None,
+            line_tool_start_tile: None,
+            shape_tool_start_tile: None,
             export_dialog: ExportDialog::default(),
+            new_map_size_dialog: MapSizeDialog::default(),
             status_message: String::from("Ready"),
+        }
+    }
+
+    fn clear_edit_anchors(&mut self) {
+        self.last_pencil_click_tile = None;
+        self.line_tool_start_tile = None;
+        self.shape_tool_start_tile = None;
+    }
+
+    fn map_hint_for_path(&self, path: &std::path::Path) -> Option<MapMetadataHint> {
+        self.map_list
+            .as_ref()
+            .and_then(|map_list| map_list.hint_for_path(path))
+    }
+
+    fn set_active_tool(&mut self, tool: Tool) {
+        if self.active_tool != tool {
+            self.active_tool = tool;
+            self.line_tool_start_tile = None;
+            self.shape_tool_start_tile = None;
         }
     }
 
@@ -115,7 +159,6 @@ impl EditorApp {
                 lookup.mapping_count()
             );
         }
-
         let wall_palette_lookup = LoadedPaletteLookup::from_pool(&pool, "stc");
         if let Some(lookup) = &wall_palette_lookup {
             info!(
@@ -184,8 +227,31 @@ impl EditorApp {
         };
 
         // Wall sprite atlas from HPF files
-        let wall_atlas =
-            Self::load_wall_atlas(&pool, legacy_palette.as_ref(), wall_palette_lookup.as_ref());
+        let wall_atlas = if let Some(lookup) = wall_palette_lookup.as_ref() {
+            match legacy_palette
+                .as_ref()
+                .or_else(|| lookup.fallback_palette())
+            {
+                Some(default_palette) => {
+                    info!("Rendering STC wall sprites using stc palette-table mode");
+                    Self::load_wall_atlas(&pool, |wall_id| {
+                        lookup
+                            .palette_for_id(wall_id + 1)
+                            .unwrap_or(default_palette)
+                    })
+                }
+                None => {
+                    warn!("No fallback palette available for stc palette-table rendering");
+                    None
+                }
+            }
+        } else if let Some(palette) = legacy_palette.as_ref() {
+            info!("Rendering STC wall sprites using legacy legend palette");
+            Self::load_wall_atlas(&pool, |_| palette)
+        } else {
+            warn!("No usable palette found for STC wall sprite rendering");
+            None
+        };
 
         // SOTP collision data
         let sotp_data = Self::get_pool_asset_case_insensitive(&pool, "SOTP.DAT").map(|data| {
@@ -201,11 +267,13 @@ impl EditorApp {
 
     /// Probe for `stcNNNNN.hpf` files in the asset pool, decode them, and
     /// pack into a single sprite atlas.
-    fn load_wall_atlas(
+    fn load_wall_atlas<'a, F>(
         pool: &archive::AssetPool,
-        legacy_palette: Option<&render::Palette>,
-        stc_palette_lookup: Option<&LoadedPaletteLookup>,
-    ) -> Option<render::SpriteAtlas> {
+        mut palette_for_wall: F,
+    ) -> Option<render::SpriteAtlas>
+    where
+        F: FnMut(u32) -> &'a render::Palette,
+    {
         let mut sprites: Vec<Option<render::HpfSprite>> = Vec::new();
         let mut last_found = 0u32;
         let mut found_count = 0u32;
@@ -252,30 +320,9 @@ impl EditorApp {
             return None;
         }
 
-        let atlas_result = if let Some(lookup) = stc_palette_lookup {
-            match legacy_palette.or_else(|| lookup.fallback_palette()) {
-                Some(default_palette) => {
-                    info!("Rendering STC sprites using stc palette-table mode");
-                    render::SpriteAtlas::build_with_sprite_palette(&sprites, 28, |sprite_id| {
-                        lookup
-                            .palette_for_id(sprite_id + 1)
-                            .unwrap_or(default_palette)
-                    })
-                }
-                None => {
-                    warn!("No fallback palette available for stc palette-table rendering");
-                    return None;
-                }
-            }
-        } else if let Some(palette) = legacy_palette {
-            info!("Rendering STC sprites using legacy legend palette");
-            render::SpriteAtlas::build(&sprites, palette, 28)
-        } else {
-            warn!("No usable palette found for STC wall sprite rendering");
-            return None;
-        };
-
-        match atlas_result {
+        match render::SpriteAtlas::build_with_sprite_palette(&sprites, 28, |wall_id| {
+            palette_for_wall(wall_id)
+        }) {
             Ok(atlas) => {
                 let (w, h) = atlas.dimensions();
                 info!(
@@ -359,11 +406,24 @@ impl EditorApp {
     }
 
     fn new_document(&mut self) {
-        self.documents.push(MapDocument::new(50, 50));
+        self.documents[self.active_tab].finish_ground_stroke();
+        let map = &self.documents[self.active_tab].map;
+        self.new_map_size_dialog.open(map.width, map.height);
+    }
+
+    fn create_document_with_dimensions(&mut self, width: u16, height: u16) {
+        if width == 0 || height == 0 {
+            self.status_message = "Width and height must both be at least 1.".to_string();
+            return;
+        }
+        self.documents.push(MapDocument::new(width, height));
         self.active_tab = self.documents.len() - 1;
+        self.clear_edit_anchors();
+        self.status_message = format!("Created new map {}x{}", width, height);
     }
 
     fn open_document(&mut self) {
+        self.documents[self.active_tab].finish_ground_stroke();
         let file = rfd::FileDialog::new()
             .add_filter("Map", &["map"])
             .pick_file();
@@ -373,14 +433,17 @@ impl EditorApp {
             for (i, doc) in self.documents.iter().enumerate() {
                 if doc.path.as_ref() == Some(&path) {
                     self.active_tab = i;
+                    self.clear_edit_anchors();
                     return;
                 }
             }
 
-            match MapDocument::open(path.clone()) {
+            let hint = self.map_hint_for_path(&path);
+            match MapDocument::open(path.clone(), hint) {
                 Ok(doc) => {
                     self.documents.push(doc);
                     self.active_tab = self.documents.len() - 1;
+                    self.clear_edit_anchors();
                     info!("Opened map: {}", path.display());
                 }
                 Err(e) => {
@@ -391,33 +454,113 @@ impl EditorApp {
     }
 
     fn save_document(&mut self) {
-        if self.documents[self.active_tab].path.is_some() {
-            if let Err(e) = self.documents[self.active_tab].save() {
-                warn!("Failed to save: {}", e);
+        self.documents[self.active_tab].finish_ground_stroke();
+        let Some(path) = self.prompt_save_path_for_active_document() else {
+            return;
+        };
+
+        let filename = path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or("map")
+            .to_owned();
+
+        self.documents[self.active_tab].path = Some(path.clone());
+        match self.documents[self.active_tab].save() {
+            Ok(()) => {
+                self.documents[self.active_tab].clear_history();
+                info!("Saved map: {}", path.display());
+                self.status_message = format!("Saved {}.", filename);
             }
-        } else {
-            self.save_document_as();
+            Err(e) => {
+                warn!("Failed to save {}: {}", path.display(), e);
+                self.status_message = format!("Save failed: {}", e);
+            }
         }
     }
 
     fn save_document_as(&mut self) {
-        let file = rfd::FileDialog::new()
-            .add_filter("Map", &["map"])
-            .save_file();
+        self.documents[self.active_tab].finish_ground_stroke();
+        let Some(path) = self.prompt_save_path_for_active_document() else {
+            return;
+        };
 
-        if let Some(path) = file {
-            match self.documents[self.active_tab].save_as(path.clone()) {
-                Ok(()) => info!("Saved map: {}", path.display()),
-                Err(e) => warn!("Failed to save as {}: {}", path.display(), e),
+        let filename = path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or("map")
+            .to_owned();
+
+        match self.documents[self.active_tab].save_as(path.clone()) {
+            Ok(()) => {
+                self.documents[self.active_tab].clear_history();
+                info!("Saved map as: {}", path.display());
+                self.status_message = format!("Saved {}.", filename);
+            }
+            Err(e) => {
+                warn!("Failed to save as {}: {}", path.display(), e);
+                self.status_message = format!("Save failed: {}", e);
             }
         }
     }
 
+    fn prompt_save_path_for_active_document(&self) -> Option<PathBuf> {
+        let doc = &self.documents[self.active_tab];
+        let suggested = Self::suggested_map_filename(doc);
+
+        let mut dialog = rfd::FileDialog::new()
+            .add_filter("Map", &["map"])
+            .set_file_name(&suggested);
+
+        if let Some(parent) = doc.path.as_ref().and_then(|p| p.parent()) {
+            dialog = dialog.set_directory(parent);
+        }
+
+        dialog.save_file().map(Self::ensure_map_extension)
+    }
+
+    fn suggested_map_filename(doc: &MapDocument) -> String {
+        let mut name = doc
+            .path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| {
+                let base = doc.display_name();
+                if base.eq_ignore_ascii_case("Untitled") {
+                    String::from("untitled.map")
+                } else {
+                    format!("{base}.map")
+                }
+            });
+
+        if !name.to_ascii_lowercase().ends_with(".map") {
+            name.push_str(".map");
+        }
+
+        name
+    }
+
+    fn ensure_map_extension(mut path: PathBuf) -> PathBuf {
+        let has_map_ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("map"))
+            .unwrap_or(false);
+        if !has_map_ext {
+            path.set_extension("map");
+        }
+        path
+    }
+
     fn close_tab(&mut self, index: usize) {
+        self.documents[self.active_tab].finish_ground_stroke();
         if self.documents.len() <= 1 {
             // Don't close the last tab — replace with a fresh document
             self.documents[0] = MapDocument::new(50, 50);
             self.active_tab = 0;
+            self.clear_edit_anchors();
             return;
         }
 
@@ -427,74 +570,239 @@ impl EditorApp {
         } else if self.active_tab >= self.documents.len() {
             self.active_tab = self.documents.len() - 1;
         }
+        self.clear_edit_anchors();
+    }
+
+    fn undo_active_document(&mut self) {
+        let doc = &mut self.documents[self.active_tab];
+        if doc.undo() {
+            self.status_message = "Undo".to_string();
+        }
+    }
+
+    fn redo_active_document(&mut self) {
+        let doc = &mut self.documents[self.active_tab];
+        if doc.redo() {
+            self.status_message = "Redo".to_string();
+        }
+    }
+
+    fn paint_ground_line(
+        doc: &mut MapDocument,
+        selected_ground_tile: u16,
+        start: (u16, u16),
+        end: (u16, u16),
+    ) {
+        doc.begin_ground_stroke(selected_ground_tile);
+        let (mut x0, mut y0) = (start.0 as i32, start.1 as i32);
+        let (x1, y1) = (end.0 as i32, end.1 as i32);
+
+        let dx = (x1 - x0).abs();
+        let sx = if x0 < x1 { 1 } else { -1 };
+        let dy = -(y1 - y0).abs();
+        let sy = if y0 < y1 { 1 } else { -1 };
+        let mut err = dx + dy;
+
+        loop {
+            if x0 >= 0 && y0 >= 0 {
+                doc.paint_ground_stroke_tile(x0 as u16, y0 as u16, selected_ground_tile);
+            }
+
+            if x0 == x1 && y0 == y1 {
+                break;
+            }
+
+            let e2 = 2 * err;
+            if e2 >= dy {
+                err += dy;
+                x0 += sx;
+            }
+            if e2 <= dx {
+                err += dx;
+                y0 += sy;
+            }
+        }
+        doc.finish_ground_stroke();
+    }
+
+    fn paint_ground_shape(
+        doc: &mut MapDocument,
+        selected_ground_tile: u16,
+        shape_kind: ShapeKind,
+        start: (u16, u16),
+        end: (u16, u16),
+    ) {
+        if selected_ground_tile == 0 {
+            return;
+        }
+
+        let points = shape::outline_points(shape_kind, start, end);
+        doc.begin_ground_stroke(selected_ground_tile);
+        for (x, y) in points {
+            if x < 0 || y < 0 {
+                continue;
+            }
+            let (x, y) = (x as u16, y as u16);
+            if x < doc.map.width && y < doc.map.height {
+                doc.paint_ground_stroke_tile(x, y, selected_ground_tile);
+            }
+        }
+        doc.finish_ground_stroke();
+    }
+
+    fn paint_ground_fill(doc: &mut MapDocument, paint_value: u16, start: (u16, u16)) {
+        if paint_value == 0 || start.0 >= doc.map.width || start.1 >= doc.map.height {
+            return;
+        }
+
+        let width = doc.map.width as usize;
+        let height = doc.map.height as usize;
+        let start_idx = start.1 as usize * width + start.0 as usize;
+        let target_value = doc.map.tiles[start_idx].ground;
+
+        if target_value == paint_value {
+            return;
+        }
+
+        let mut visited = vec![false; width * height];
+        let mut queue = VecDeque::new();
+        visited[start_idx] = true;
+        queue.push_back(start);
+
+        doc.begin_ground_stroke(paint_value);
+
+        while let Some((col, row)) = queue.pop_front() {
+            let idx = row as usize * width + col as usize;
+            if doc.map.tiles[idx].ground != target_value {
+                continue;
+            }
+
+            doc.paint_ground_stroke_tile(col, row, paint_value);
+
+            let neighbors = [
+                (col.checked_sub(1), Some(row)),
+                (col.checked_add(1).filter(|&c| c < doc.map.width), Some(row)),
+                (Some(col), row.checked_sub(1)),
+                (
+                    Some(col),
+                    row.checked_add(1).filter(|&r| r < doc.map.height),
+                ),
+            ];
+
+            for (ncol, nrow) in neighbors {
+                let (Some(ncol), Some(nrow)) = (ncol, nrow) else {
+                    continue;
+                };
+
+                let nidx = nrow as usize * width + ncol as usize;
+                if visited[nidx] {
+                    continue;
+                }
+                visited[nidx] = true;
+
+                if doc.map.tiles[nidx].ground == target_value {
+                    queue.push_back((ncol, nrow));
+                }
+            }
+        }
+
+        doc.finish_ground_stroke();
     }
 
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
-        let (new, open, save, save_as, close, export, tool, toggle_layer, keyboard_zoom, reset_zoom) =
-            ctx.input(|i| {
-                let cmd = i.modifiers.command;
-                let shift = i.modifiers.shift;
+        let (
+            new,
+            open,
+            save,
+            save_as,
+            close,
+            undo,
+            redo,
+            export,
+            tool,
+            toggle_layer,
+            keyboard_zoom,
+            reset_zoom,
+        ) = ctx.input(|i| {
+            let cmd = i.modifiers.command;
+            let shift = i.modifiers.shift;
 
-                // Tool shortcuts (no modifiers) — only Select is enabled for now
-                let tool = if !cmd && !shift {
-                    if i.key_pressed(egui::Key::V) {
-                        Some(Tool::Select)
-                    } else {
-                        None
-                    }
+            // Tool shortcuts (no modifiers)
+            let tool = if !cmd && !shift {
+                if i.key_pressed(egui::Key::V) {
+                    Some(Tool::Select)
+                } else if i.key_pressed(egui::Key::B) {
+                    Some(Tool::Pencil)
+                } else if i.key_pressed(egui::Key::G) {
+                    Some(Tool::Fill)
+                } else if i.key_pressed(egui::Key::L) {
+                    Some(Tool::Line)
+                } else if i.key_pressed(egui::Key::R) {
+                    Some(Tool::Shape)
+                } else if i.key_pressed(egui::Key::E) {
+                    Some(Tool::Eraser)
+                } else if i.key_pressed(egui::Key::I) {
+                    Some(Tool::Eyedropper)
                 } else {
                     None
-                };
+                }
+            } else {
+                None
+            };
 
-                // Layer/grid toggle shortcuts (Cmd+1/2/3/4)
-                let toggle_layer = if cmd && !shift {
-                    if i.key_pressed(egui::Key::Num1) {
-                        Some(1)
-                    } else if i.key_pressed(egui::Key::Num2) {
-                        Some(2)
-                    } else if i.key_pressed(egui::Key::Num3) {
-                        Some(3)
-                    } else if i.key_pressed(egui::Key::Num4) {
-                        Some(4)
-                    } else {
-                        None
-                    }
+            // Layer/grid toggle shortcuts (Cmd+1/2/3/4)
+            let toggle_layer = if cmd && !shift {
+                if i.key_pressed(egui::Key::Num1) {
+                    Some(1)
+                } else if i.key_pressed(egui::Key::Num2) {
+                    Some(2)
+                } else if i.key_pressed(egui::Key::Num3) {
+                    Some(3)
+                } else if i.key_pressed(egui::Key::Num4) {
+                    Some(4)
                 } else {
                     None
-                };
+                }
+            } else {
+                None
+            };
 
-                // Keyboard zoom (Cmd+/-, snap to 25%; Cmd+0 reset)
-                let keyboard_zoom: Option<i8> = if cmd && !shift {
-                    if i.key_pressed(egui::Key::Minus) {
-                        Some(-1)
-                    } else if i.key_pressed(egui::Key::Plus)
-                        || i.key_pressed(egui::Key::Equals)
-                    {
-                        Some(1)
-                    } else {
-                        None
-                    }
+            // Keyboard zoom (Cmd+/-, snap to 25%; Cmd+0 reset)
+            let keyboard_zoom: Option<i8> = if cmd && !shift {
+                if i.key_pressed(egui::Key::Minus) {
+                    Some(-1)
+                } else if i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals) {
+                    Some(1)
                 } else {
                     None
-                };
-                let reset_zoom = cmd && !shift && i.key_pressed(egui::Key::Num0);
+                }
+            } else {
+                None
+            };
+            let reset_zoom = cmd && !shift && i.key_pressed(egui::Key::Num0);
+            let save = cmd && !shift && i.key_pressed(egui::Key::S);
+            let save_as = cmd && shift && i.key_pressed(egui::Key::S);
+            let undo = cmd && !shift && i.key_pressed(egui::Key::Z);
+            let redo = cmd && shift && i.key_pressed(egui::Key::Z);
 
-                (
-                    cmd && i.key_pressed(egui::Key::N),
-                    cmd && i.key_pressed(egui::Key::O),
-                    false, // Save disabled for now
-                    false, // Save As disabled for now
-                    cmd && i.key_pressed(egui::Key::W),
-                    cmd && i.key_pressed(egui::Key::E),
-                    tool,
-                    toggle_layer,
-                    keyboard_zoom,
-                    reset_zoom,
-                )
-            });
+            (
+                cmd && i.key_pressed(egui::Key::N),
+                cmd && i.key_pressed(egui::Key::O),
+                save,
+                save_as,
+                cmd && i.key_pressed(egui::Key::W),
+                undo,
+                redo,
+                cmd && i.key_pressed(egui::Key::E),
+                tool,
+                toggle_layer,
+                keyboard_zoom,
+                reset_zoom,
+            )
+        });
 
         if let Some(t) = tool {
-            self.active_tool = t;
+            self.set_active_tool(t);
         }
         if let Some(layer) = toggle_layer {
             match layer {
@@ -525,9 +833,16 @@ impl EditorApp {
         if close {
             self.close_tab(self.active_tab);
         }
+        if undo {
+            self.undo_active_document();
+        }
+        if redo {
+            self.redo_active_document();
+        }
         if save_as {
             self.save_document_as();
-        } else if save {
+        }
+        if save {
             self.save_document();
         }
         if export {
@@ -546,17 +861,21 @@ impl EditorApp {
                     continue;
                 }
                 // Check if already open — just switch to it
-                let already_open = self.documents.iter().position(|doc| {
-                    doc.path.as_ref() == Some(&path)
-                });
+                let already_open = self
+                    .documents
+                    .iter()
+                    .position(|doc| doc.path.as_ref() == Some(&path));
                 if let Some(i) = already_open {
                     self.active_tab = i;
+                    self.clear_edit_anchors();
                     continue;
                 }
-                match MapDocument::open(path.clone()) {
+                let hint = self.map_hint_for_path(&path);
+                match MapDocument::open(path.clone(), hint) {
                     Ok(doc) => {
                         self.documents.push(doc);
                         self.active_tab = self.documents.len() - 1;
+                        self.clear_edit_anchors();
                         info!("Opened dropped map: {}", path.display());
                     }
                     Err(e) => {
@@ -605,18 +924,39 @@ impl eframe::App for EditorApp {
         match tab_action {
             TabBarAction::CloseTab(i) => self.close_tab(i),
             TabBarAction::SwitchTab(i) => {
+                self.documents[self.active_tab].finish_ground_stroke();
                 self.active_tab = i;
+                self.clear_edit_anchors();
                 self.tab_bar.ensure_tab_visible(&self.documents, i);
             }
             TabBarAction::None => {}
         }
 
         let doc = &self.documents[self.active_tab];
+        let can_undo = doc.can_undo();
+        let can_redo = doc.can_redo();
         let current_zoom = doc.camera.zoom;
-        let status_action = StatusBarPanel::show(
+        let current_file_label = {
+            let base = doc
+                .path
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| doc.display_name());
+            if doc.dirty { format!("{base} *") } else { base }
+        };
+        let alt_held = ctx.input(|i| i.modifiers.alt);
+        let effective_tool = if alt_held {
+            Tool::Eyedropper
+        } else {
+            self.active_tool
+        };
+        let status_action = self.status_bar.show(
             ctx,
             &doc.map,
-            self.active_tool,
+            &current_file_label,
+            effective_tool,
             self.hover_tile,
             current_zoom,
             &self.status_message,
@@ -629,15 +969,37 @@ impl eframe::App for EditorApp {
                 Self::snap_zoom(&mut self.documents[self.active_tab].camera, -1);
             }
             StatusBarAction::SetDimensions(w, h) => {
-                self.documents[self.active_tab].set_dimensions(w, h);
+                if let Err(err) = self.documents[self.active_tab].set_dimensions(w, h) {
+                    self.status_message = err;
+                } else {
+                    self.status_message = format!("Resized map to {}x{}", w, h);
+                }
             }
             StatusBarAction::None => {}
         }
 
-        let toolbar_action = ToolbarPanel::show(ctx, &mut self.active_tool);
+        let toolbar_tool = if alt_held {
+            Tool::Eyedropper
+        } else {
+            self.active_tool
+        };
+        let mut requested_tool = toolbar_tool;
+        let toolbar_action = ToolbarPanel::show(
+            ctx,
+            &mut requested_tool,
+            &mut self.active_shape_kind,
+            can_undo,
+            can_redo,
+        );
+        if !alt_held || requested_tool != toolbar_tool {
+            self.set_active_tool(requested_tool);
+        }
         match toolbar_action {
             ToolbarAction::NewFile => self.new_document(),
             ToolbarAction::OpenFile => self.open_document(),
+            ToolbarAction::SaveFile => self.save_document(),
+            ToolbarAction::Undo => self.undo_active_document(),
+            ToolbarAction::Redo => self.redo_active_document(),
             ToolbarAction::Export => {
                 let doc_name = self.documents[self.active_tab].display_name();
                 self.export_dialog.open_for(&doc_name);
@@ -645,12 +1007,19 @@ impl eframe::App for EditorApp {
             ToolbarAction::None => {}
         }
 
+        if let Some((width, height)) =
+            self.new_map_size_dialog
+                .show(ctx, "new_map_size_dialog", "New Map", "Create", None)
+        {
+            self.create_document_with_dimensions(width, height);
+        }
+
         // Export dialog
         {
             let doc = &self.documents[self.active_tab];
-            let export_action =
-                self.export_dialog
-                    .show(ctx, &doc.map, self.wall_atlas.as_ref());
+            let export_action = self
+                .export_dialog
+                .show(ctx, &doc.map, self.wall_atlas.as_ref());
             match export_action {
                 ExportDialogAction::Export {
                     path,
@@ -712,7 +1081,14 @@ impl eframe::App for EditorApp {
         // Inspector: tileset + tab map
         {
             let doc = &self.documents[self.active_tab];
-            InspectorPanel::show(ctx, &doc.map, self.sotp_data.as_deref());
+            InspectorPanel::show(
+                ctx,
+                &doc.map,
+                self.sotp_data.as_deref(),
+                self.tile_atlas.as_ref(),
+                self.atlas_texture.as_ref(),
+                &mut self.selected_ground_tile,
+            );
         }
 
         // Viewport needs mutable access to camera for panning
@@ -721,6 +1097,11 @@ impl eframe::App for EditorApp {
             ctx,
             &doc.map,
             &mut doc.camera,
+            effective_tool,
+            self.active_shape_kind,
+            self.selected_ground_tile,
+            self.line_tool_start_tile,
+            self.shape_tool_start_tile,
             self.tile_atlas.as_ref(),
             self.atlas_texture.as_ref(),
             self.wall_atlas.as_ref(),
@@ -733,6 +1114,82 @@ impl eframe::App for EditorApp {
         }
         if let Some(tile) = vp_result.clicked_tile {
             self.selected_tile = Some(tile);
+        }
+        if let Some(pick) = vp_result.eyedropper_pick {
+            match pick {
+                EyedropperPick::Ground(tile_id) => {
+                    self.selected_ground_tile = tile_id;
+                    self.status_message = format!("Picked ground tile #{}.", tile_id);
+                }
+                EyedropperPick::LeftWall(tile_id) => {
+                    self.selected_left_wall_tile = tile_id;
+                    self.status_message =
+                        format!("Picked left wall #{}.", self.selected_left_wall_tile);
+                }
+                EyedropperPick::RightWall(tile_id) => {
+                    self.selected_right_wall_tile = tile_id;
+                    self.status_message =
+                        format!("Picked right wall #{}.", self.selected_right_wall_tile);
+                }
+            }
+        }
+
+        let cancel_shape_or_line = ctx.input(|i| {
+            i.key_pressed(egui::Key::Escape)
+                || i.pointer.button_pressed(egui::PointerButton::Secondary)
+        });
+        if cancel_shape_or_line {
+            self.line_tool_start_tile = None;
+            self.shape_tool_start_tile = None;
+        }
+
+        if self.active_tool == Tool::Pencil {
+            if let Some(end) = vp_result.pencil_shift_clicked_tile {
+                doc.finish_ground_stroke();
+                if let Some(start) = self.last_pencil_click_tile {
+                    Self::paint_ground_line(doc, self.selected_ground_tile, start, end);
+                    self.last_pencil_click_tile = Some(end);
+                }
+            } else if let Some(point) = vp_result.pencil_clicked_tile {
+                self.last_pencil_click_tile = Some(point);
+            }
+        } else if self.active_tool == Tool::Line {
+            if let Some(end) = vp_result.line_clicked_tile {
+                if let Some(start) = self.line_tool_start_tile {
+                    doc.finish_ground_stroke();
+                    Self::paint_ground_line(doc, self.selected_ground_tile, start, end);
+                    self.line_tool_start_tile = Some(end);
+                } else {
+                    self.line_tool_start_tile = Some(end);
+                }
+            }
+        } else if self.active_tool == Tool::Shape {
+            if let Some(end) = vp_result.shape_clicked_tile {
+                if let Some(start) = self.shape_tool_start_tile {
+                    doc.finish_ground_stroke();
+                    Self::paint_ground_shape(
+                        doc,
+                        self.selected_ground_tile,
+                        self.active_shape_kind,
+                        start,
+                        end,
+                    );
+                    self.shape_tool_start_tile = None;
+                } else {
+                    self.shape_tool_start_tile = Some(end);
+                }
+            }
+        } else if self.active_tool == Tool::Fill {
+            if let Some((col, row, paint_value)) = vp_result.fill_clicked_tile {
+                Self::paint_ground_fill(doc, paint_value, (col, row));
+            }
+        }
+        if let Some((col, row, paint_value)) = vp_result.painted_tile {
+            doc.paint_ground_stroke_tile(col, row, paint_value);
+        }
+        let primary_down = ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
+        if !primary_down {
+            doc.finish_ground_stroke();
         }
     }
 }

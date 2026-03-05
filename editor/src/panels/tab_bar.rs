@@ -18,9 +18,7 @@ pub struct TabBarPanel {
 
 impl Default for TabBarPanel {
     fn default() -> Self {
-        Self {
-            scroll_offset: 0.0,
-        }
+        Self { scroll_offset: 0.0 }
     }
 }
 
@@ -77,12 +75,11 @@ impl TabBarPanel {
 
                     // Render tabs in a clipped child UI
                     let inner_width = total_tabs_width.max(tabs_area_width);
-                    let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(
-                        egui::Rect::from_min_size(
+                    let mut child_ui =
+                        ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
                             egui::pos2(clip_rect.left() - self.scroll_offset, clip_rect.top()),
                             egui::vec2(inner_width, TAB_BAR_HEIGHT),
-                        ),
-                    ));
+                        )));
                     child_ui.set_clip_rect(clip_rect);
                     child_ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
 
@@ -90,8 +87,7 @@ impl TabBarPanel {
                         ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
                         for (i, doc) in documents.iter().enumerate() {
                             let is_active = i == active_tab;
-                            let tab_action =
-                                Self::tab_button(ui, doc, i, is_active, &colors);
+                            let tab_action = Self::tab_button(ui, doc, i, is_active, &colors);
                             if !matches!(tab_action, TabBarAction::None) {
                                 action = tab_action;
                             }
@@ -105,11 +101,9 @@ impl TabBarPanel {
                         let can_scroll_right = self.scroll_offset < max_scroll;
                         if Self::nav_button(ui, ">", can_scroll_right, &colors) {
                             let max_s = (total_tabs_width - tabs_area_width).max(0.0);
-                            self.scroll_offset =
-                                (self.scroll_offset + 120.0).min(max_s);
+                            self.scroll_offset = (self.scroll_offset + 120.0).min(max_s);
                         }
                     }
-
                 });
             });
 
@@ -139,11 +133,7 @@ impl TabBarPanel {
     /// Measure the width a tab would occupy.
     fn measure_tab_width(ui: &egui::Ui, doc: &MapDocument, is_active: bool) -> f32 {
         let name = doc.display_name();
-        let label = if doc.dirty {
-            format!("{name} *")
-        } else {
-            name
-        };
+        let label = if doc.dirty { format!("{name} *") } else { name };
 
         let text_color = if is_active {
             egui::Color32::WHITE
@@ -162,19 +152,18 @@ impl TabBarPanel {
     /// Rough tab width estimate without painter access (for ensure_tab_visible).
     fn estimate_tab_width(doc: &MapDocument, _is_active: bool) -> f32 {
         let name = doc.display_name();
-        let chars = if doc.dirty { name.len() + 2 } else { name.len() };
+        let chars = if doc.dirty {
+            name.len() + 2
+        } else {
+            name.len()
+        };
         let close_width: f32 = 20.0;
         let h_pad: f32 = 12.0;
         let approx_char_width = 7.5;
         h_pad + chars as f32 * approx_char_width + 6.0 + close_width + 6.0
     }
 
-    fn nav_button(
-        ui: &mut egui::Ui,
-        label: &str,
-        enabled: bool,
-        colors: &ThemeColors,
-    ) -> bool {
+    fn nav_button(ui: &mut egui::Ui, label: &str, enabled: bool, colors: &ThemeColors) -> bool {
         let size = egui::vec2(NAV_BUTTON_WIDTH, TAB_BAR_HEIGHT);
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
         let painter = ui.painter();
@@ -216,36 +205,28 @@ impl TabBarPanel {
         let mut action = TabBarAction::None;
 
         let name = doc.display_name();
-        let label = if doc.dirty {
-            format!("{name} *")
-        } else {
-            name
-        };
+        let label = if doc.dirty { format!("{name} *") } else { name };
 
         let bg = if is_active {
             colors.bg // seamless blend with viewport
         } else {
             colors.bg_2 // recessed
         };
-        let text_color = if is_active {
-            colors.text
-        } else {
-            colors.muted
-        };
+        let text_color = if is_active { colors.text } else { colors.muted };
 
         // Measure text to compute tab width
         let font = egui::FontId::proportional(13.0);
         let close_width: f32 = 20.0;
         let h_pad: f32 = 12.0;
-        let galley = ui.painter().layout_no_wrap(label.clone(), font.clone(), text_color);
+        let galley = ui
+            .painter()
+            .layout_no_wrap(label.clone(), font.clone(), text_color);
         let text_width = galley.size().x;
         let tab_width = h_pad + text_width + 6.0 + close_width + 6.0;
 
         // Allocate the tab rect
-        let (tab_rect, tab_response) = ui.allocate_exact_size(
-            egui::vec2(tab_width, TAB_BAR_HEIGHT),
-            egui::Sense::click(),
-        );
+        let (tab_rect, tab_response) =
+            ui.allocate_exact_size(egui::vec2(tab_width, TAB_BAR_HEIGHT), egui::Sense::click());
 
         let painter = ui.painter();
 
@@ -263,7 +244,10 @@ impl TabBarPanel {
 
         // Close button (x) — sub-interaction within tab rect
         let close_rect = egui::Rect::from_center_size(
-            egui::pos2(tab_rect.right() - 6.0 - close_width / 2.0, tab_rect.center().y),
+            egui::pos2(
+                tab_rect.right() - 6.0 - close_width / 2.0,
+                tab_rect.center().y,
+            ),
             egui::vec2(close_width, close_width),
         );
         let close_response = ui.interact(
