@@ -7,20 +7,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [0.2.0] - 2026-03-05
 
 ### Added
-- `maps.ron` metadata support for friendly map naming and size hints when tile count matches.
-- A new Shape tool with a dropdown that lets you choose `Rect`, `Square`, `Circle`, or `Triangle`.
-- The Shape tool now remembers your last selected shape and keeps that icon in the toolbar.
-- Shape drawing now works directly in the map view with live preview before placing.
-- The current map/file name is now shown in the status bar near zoom so it is always visible.
+- Full in-editor map editing, including pencil painting, erase, fill, line drawing, and a shape tool.
+- Shape tool dropdown with `Rect`, `Square`, `Circle`, and `Triangle`.
+- Undo and redo support for edit operations.
+- New map creation and custom map sizing dialogs.
+- `maps.ron` metadata support for friendly map names and map-size hints when counts match.
+- Drag-and-drop map opening and multi-tab map workflow.
+- Status bar improvements, including always-visible active file name and clearer map/zoom layout.
+- Tab map preview support in the inspector.
+- PNG export controls for scale/background, including optional tab map export output.
+- Asset loading from game `.dat` archives for tiles, palettes, and wall sprites.
+- Wall/object rendering support and better scene layering for map visuals.
+- Custom app icon/window frame polish and cross-platform build setup.
 
 ### Changed
-- Undo and Redo icons are now simple back/forward arrows.
-- The New Map dialog is cleaner and now focuses only on width and height inputs.
-- Added clearer visual separation in the status bar between map name and zoom controls.
+- Undo and redo icons now use simple back/forward arrows.
+- New Map and Custom Size dialogs were simplified and made easier to read.
+- Map/file context moved from tab hover behavior into the status bar for constant visibility.
 
 ### Fixed
-- Improved vertical alignment of `Width x Height` labels and fields in both size dialogs.
-- The Custom Size dialog now warns when resizing would reduce tile count and truncate data.
-- Removed dependency on tab hover for seeing filenames by showing the active filename in the status bar.
-- Fixed a crash while typing size values by correcting truncation-warning arithmetic.
-- Added guardrails so map width/height cannot be applied as `0` even outside dialog validation.
+- Improved vertical alignment of `Width x Height` labels and fields in size dialogs.
+- Custom Size now warns when reducing tile count would truncate data.
+- Fixed a crash while typing map size values in the dialog.
+- Added safeguards so zero-sized map dimensions cannot be applied.
