@@ -336,12 +336,14 @@ impl EditorApp {
     }
 
     fn new_document(&mut self) {
+        self.documents[self.active_tab].finish_ground_stroke();
         self.documents.push(MapDocument::new(50, 50));
         self.active_tab = self.documents.len() - 1;
         self.last_pencil_click_tile = None;
     }
 
     fn open_document(&mut self) {
+        self.documents[self.active_tab].finish_ground_stroke();
         let file = rfd::FileDialog::new()
             .add_filter("Map", &["map"])
             .pick_file();
@@ -371,6 +373,7 @@ impl EditorApp {
     }
 
     fn save_document(&mut self) {
+        self.documents[self.active_tab].finish_ground_stroke();
         let Some(path) = self.prompt_save_path_for_active_document() else {
             return;
         };
@@ -384,6 +387,7 @@ impl EditorApp {
         self.documents[self.active_tab].path = Some(path.clone());
         match self.documents[self.active_tab].save() {
             Ok(()) => {
+                self.documents[self.active_tab].clear_history();
                 info!("Saved map: {}", path.display());
                 self.status_message = format!("Saved {}.", filename);
             }
@@ -395,6 +399,7 @@ impl EditorApp {
     }
 
     fn save_document_as(&mut self) {
+        self.documents[self.active_tab].finish_ground_stroke();
         let Some(path) = self.prompt_save_path_for_active_document() else {
             return;
         };
@@ -407,6 +412,7 @@ impl EditorApp {
 
         match self.documents[self.active_tab].save_as(path.clone()) {
             Ok(()) => {
+                self.documents[self.active_tab].clear_history();
                 info!("Saved map as: {}", path.display());
                 self.status_message = format!("Saved {}.", filename);
             }
@@ -468,6 +474,7 @@ impl EditorApp {
     }
 
     fn close_tab(&mut self, index: usize) {
+        self.documents[self.active_tab].finish_ground_stroke();
         if self.documents.len() <= 1 {
             // Don't close the last tab — replace with a fresh document
             self.documents[0] = MapDocument::new(50, 50);
@@ -485,21 +492,18 @@ impl EditorApp {
         self.last_pencil_click_tile = None;
     }
 
-    fn paint_ground_tile(
-        doc: &mut MapDocument,
-        selected_ground_tile: u16,
-        col: u16,
-        row: u16,
-    ) -> bool {
-        let idx = row as usize * doc.map.width as usize + col as usize;
-        if let Some(tile) = doc.map.tiles.get_mut(idx) {
-            if tile.ground != selected_ground_tile {
-                tile.ground = selected_ground_tile;
-                doc.dirty = true;
-                return true;
-            }
+    fn undo_active_document(&mut self) {
+        let doc = &mut self.documents[self.active_tab];
+        if doc.undo() {
+            self.status_message = "Undo".to_string();
         }
-        false
+    }
+
+    fn redo_active_document(&mut self) {
+        let doc = &mut self.documents[self.active_tab];
+        if doc.redo() {
+            self.status_message = "Redo".to_string();
+        }
     }
 
     fn paint_ground_line(
@@ -507,7 +511,8 @@ impl EditorApp {
         selected_ground_tile: u16,
         start: (u16, u16),
         end: (u16, u16),
-    ) -> bool {
+    ) {
+        doc.begin_ground_stroke(selected_ground_tile);
         let (mut x0, mut y0) = (start.0 as i32, start.1 as i32);
         let (x1, y1) = (end.0 as i32, end.1 as i32);
 
@@ -517,10 +522,9 @@ impl EditorApp {
         let sy = if y0 < y1 { 1 } else { -1 };
         let mut err = dx + dy;
 
-        let mut changed = false;
         loop {
             if x0 >= 0 && y0 >= 0 {
-                changed |= Self::paint_ground_tile(doc, selected_ground_tile, x0 as u16, y0 as u16);
+                doc.paint_ground_stroke_tile(x0 as u16, y0 as u16, selected_ground_tile);
             }
 
             if x0 == x1 && y0 == y1 {
@@ -537,8 +541,7 @@ impl EditorApp {
                 y0 += sy;
             }
         }
-
-        changed
+        doc.finish_ground_stroke();
     }
 
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
@@ -548,6 +551,8 @@ impl EditorApp {
             save,
             save_as,
             close,
+            undo,
+            redo,
             export,
             tool,
             toggle_layer,
@@ -602,6 +607,8 @@ impl EditorApp {
             let reset_zoom = cmd && !shift && i.key_pressed(egui::Key::Num0);
             let save = cmd && !shift && i.key_pressed(egui::Key::S);
             let save_as = cmd && shift && i.key_pressed(egui::Key::S);
+            let undo = cmd && !shift && i.key_pressed(egui::Key::Z);
+            let redo = cmd && shift && i.key_pressed(egui::Key::Z);
 
             (
                 cmd && i.key_pressed(egui::Key::N),
@@ -609,6 +616,8 @@ impl EditorApp {
                 save,
                 save_as,
                 cmd && i.key_pressed(egui::Key::W),
+                undo,
+                redo,
                 cmd && i.key_pressed(egui::Key::E),
                 tool,
                 toggle_layer,
@@ -648,6 +657,12 @@ impl EditorApp {
         }
         if close {
             self.close_tab(self.active_tab);
+        }
+        if undo {
+            self.undo_active_document();
+        }
+        if redo {
+            self.redo_active_document();
         }
         if save_as {
             self.save_document_as();
@@ -733,6 +748,7 @@ impl eframe::App for EditorApp {
         match tab_action {
             TabBarAction::CloseTab(i) => self.close_tab(i),
             TabBarAction::SwitchTab(i) => {
+                self.documents[self.active_tab].finish_ground_stroke();
                 self.active_tab = i;
                 self.last_pencil_click_tile = None;
                 self.tab_bar.ensure_tab_visible(&self.documents, i);
@@ -741,6 +757,8 @@ impl eframe::App for EditorApp {
         }
 
         let doc = &self.documents[self.active_tab];
+        let can_undo = doc.can_undo();
+        let can_redo = doc.can_redo();
         let current_zoom = doc.camera.zoom;
         let status_action = StatusBarPanel::show(
             ctx,
@@ -763,11 +781,13 @@ impl eframe::App for EditorApp {
             StatusBarAction::None => {}
         }
 
-        let toolbar_action = ToolbarPanel::show(ctx, &mut self.active_tool);
+        let toolbar_action = ToolbarPanel::show(ctx, &mut self.active_tool, can_undo, can_redo);
         match toolbar_action {
             ToolbarAction::NewFile => self.new_document(),
             ToolbarAction::OpenFile => self.open_document(),
             ToolbarAction::SaveFile => self.save_document(),
+            ToolbarAction::Undo => self.undo_active_document(),
+            ToolbarAction::Redo => self.redo_active_document(),
             ToolbarAction::Export => {
                 let doc_name = self.documents[self.active_tab].display_name();
                 self.export_dialog.open_for(&doc_name);
@@ -875,6 +895,7 @@ impl eframe::App for EditorApp {
         }
         if self.active_tool == Tool::Pencil {
             if let Some(end) = vp_result.pencil_shift_clicked_tile {
+                doc.finish_ground_stroke();
                 if let Some(start) = self.last_pencil_click_tile {
                     Self::paint_ground_line(doc, self.selected_ground_tile, start, end);
                     self.last_pencil_click_tile = Some(end);
@@ -884,7 +905,11 @@ impl eframe::App for EditorApp {
             }
         }
         if let Some((col, row)) = vp_result.painted_tile {
-            Self::paint_ground_tile(doc, self.selected_ground_tile, col, row);
+            doc.paint_ground_stroke_tile(col, row, self.selected_ground_tile);
+        }
+        let primary_down = ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
+        if !primary_down {
+            doc.finish_ground_stroke();
         }
     }
 }

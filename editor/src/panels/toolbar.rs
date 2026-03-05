@@ -12,6 +12,8 @@ pub enum ToolbarAction {
     NewFile,
     OpenFile,
     SaveFile,
+    Undo,
+    Redo,
     Export,
 }
 
@@ -52,7 +54,12 @@ impl Tool {
 pub struct ToolbarPanel;
 
 impl ToolbarPanel {
-    pub fn show(ctx: &egui::Context, active_tool: &mut Tool) -> ToolbarAction {
+    pub fn show(
+        ctx: &egui::Context,
+        active_tool: &mut Tool,
+        can_undo: bool,
+        can_redo: bool,
+    ) -> ToolbarAction {
         let colors = theme_colors();
         let mut action = ToolbarAction::None;
 
@@ -70,7 +77,7 @@ impl ToolbarPanel {
                     }),
             )
             .show(ctx, |ui| {
-                Self::draw(ui, active_tool, &colors, &mut action);
+                Self::draw(ui, active_tool, can_undo, can_redo, &colors, &mut action);
             });
 
         action
@@ -79,6 +86,8 @@ impl ToolbarPanel {
     fn draw(
         ui: &mut egui::Ui,
         active_tool: &mut Tool,
+        can_undo: bool,
+        can_redo: bool,
         colors: &ThemeColors,
         action: &mut ToolbarAction,
     ) {
@@ -154,22 +163,19 @@ impl ToolbarPanel {
             ui.painter().rect_filled(divider_rect2, 0.0, colors.border);
             ui.add_space(2.0);
 
-            // --- Undo / Redo (placeholder, disabled) ---
-            Self::disabled_icon_button(ui, icons::draw_icon_undo, "Undo (Cmd+Z)", colors);
-            Self::disabled_icon_button(ui, icons::draw_icon_redo, "Redo (Cmd+Shift+Z)", colors);
-        });
-    }
+            // --- Undo / Redo ---
+            let undo_response = Self::icon_button(ui, icons::draw_icon_undo, colors, can_undo);
+            if can_undo && undo_response.clicked() {
+                *action = ToolbarAction::Undo;
+            }
+            undo_response.on_hover_text("Undo (Cmd+Z)");
 
-    fn disabled_icon_button(
-        ui: &mut egui::Ui,
-        draw_fn: fn(&egui::Painter, egui::Rect, egui::Color32),
-        tooltip: &str,
-        colors: &ThemeColors,
-    ) {
-        let size = egui::vec2(TOOL_BUTTON_SIZE, TOOL_BUTTON_SIZE);
-        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
-        draw_fn(ui.painter(), rect, colors.border);
-        response.on_hover_text(tooltip);
+            let redo_response = Self::icon_button(ui, icons::draw_icon_redo, colors, can_redo);
+            if can_redo && redo_response.clicked() {
+                *action = ToolbarAction::Redo;
+            }
+            redo_response.on_hover_text("Redo (Cmd+Shift+Z)");
+        });
     }
 
     fn disabled_tool_button(ui: &mut egui::Ui, tool: Tool, colors: &ThemeColors) {
@@ -184,17 +190,31 @@ impl ToolbarPanel {
         draw_fn: fn(&egui::Painter, egui::Rect, egui::Color32),
         colors: &ThemeColors,
     ) -> egui::Response {
+        Self::icon_button(ui, draw_fn, colors, true)
+    }
+
+    fn icon_button(
+        ui: &mut egui::Ui,
+        draw_fn: fn(&egui::Painter, egui::Rect, egui::Color32),
+        colors: &ThemeColors,
+        enabled: bool,
+    ) -> egui::Response {
         let size = egui::vec2(TOOL_BUTTON_SIZE, TOOL_BUTTON_SIZE);
-        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+        let sense = if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        };
+        let (rect, response) = ui.allocate_exact_size(size, sense);
         let painter = ui.painter();
 
-        let bg = if response.hovered() {
+        let bg = if enabled && response.hovered() {
             colors.panel_2
         } else {
             egui::Color32::TRANSPARENT
         };
 
-        let border = if response.hovered() {
+        let border = if enabled && response.hovered() {
             egui::Stroke::new(1.0, colors.border)
         } else {
             egui::Stroke::NONE
@@ -202,10 +222,12 @@ impl ToolbarPanel {
 
         painter.rect(rect, 4.0, bg, border, egui::StrokeKind::Inside);
 
-        let icon_color = if response.hovered() {
+        let icon_color = if enabled && response.hovered() {
             colors.text
-        } else {
+        } else if enabled {
             colors.muted
+        } else {
+            colors.border
         };
 
         draw_fn(painter, rect, icon_color);

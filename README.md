@@ -76,6 +76,13 @@ cargo run --release
 - **Cmd+3** — Toggle right walls
 - **Cmd+4** — Toggle grid overlay
 
+### Editing
+
+- **B** — Switch to Pencil tool
+- **Left click (Pencil)** — Paint the hovered tile
+- **Left drag (Pencil)** — Paint continuously while holding the mouse button
+- **Shift+Left click (Pencil)** — Draw a line from the last pencil click to the clicked tile (does nothing if there is no previous pencil click)
+
 ### Export
 
 - **Cmd+E** — Open the export dialog
