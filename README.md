@@ -3,6 +3,10 @@
 Isometric map viewer and PNG exporter for Shadows of Temuair (Dark Ages) `.map` files.
 Built with Rust and [egui](https://github.com/emilk/egui).
 
+Supports both:
+- Legacy single-palette rendering (`legend.pal`)
+- Newer palette-table rendering (`mpt*` / `stc*` `.tbl` + `.pal`)
+
 **This is a work in progress. Currently only allows viewing and exporting maps.**
 
 ![Screenshot](screenshot.png)
@@ -28,10 +32,18 @@ The editor loads game assets from `.dat` archive files in an `assets/` directory
 
 | File | Purpose |
 |------|---------|
-| `legend.pal` | 256-color RGB palette used for all indexed-color images |
 | `TILEA.BMP` | Ground tile sprite sheet (56x27 px tiles) |
 | `stcNNNNN.hpf` | Wall/object sprites (Huffman-compressed, 28px wide) |
 | `SOTP.DAT` | Tile collision/passability data — **required for tab map rendering and export** |
+
+**Palette assets (one of these modes, auto-detected):**
+
+| Mode | Files |
+|------|-------|
+| Legacy | `legend.pal` |
+| Palette-table (newer clients) | Ground: `mpt*.tbl` + `mpt*.pal`<br>Walls: `stc*.tbl` + `stc*.pal` |
+
+When palette-table assets are present, the editor uses them. If they are missing, it falls back to legacy `legend.pal` rendering. Mixed asset sets are also supported (for example, palette-table ground with legacy walls).
 
 Without `SOTP.DAT`, the tab map preview in the inspector panel and tab map PNG export will be unavailable. Without the tile/wall assets, maps will open but tiles will not render.
 

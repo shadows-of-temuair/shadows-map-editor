@@ -4,6 +4,7 @@ use eframe::egui;
 use tracing::{info, warn};
 
 use crate::document::{LayerVisibility, MapDocument};
+use crate::palette_lookup::LoadedPaletteLookup;
 use crate::panels::{
     ExportDialog, ExportDialogAction, InspectorPanel, StatusBarAction, StatusBarPanel,
     TabBarAction, TabBarPanel, TitleBarPanel, Tool, ToolbarAction, ToolbarPanel, ViewportPanel,
@@ -60,8 +61,24 @@ impl EditorApp {
         }
     }
 
+    fn get_pool_asset_case_insensitive<'a>(
+        pool: &'a archive::AssetPool,
+        name: &str,
+    ) -> Option<&'a [u8]> {
+        pool.get(name).or_else(|| {
+            let actual_name = pool
+                .names()
+                .find(|entry| entry.eq_ignore_ascii_case(name))?;
+            pool.get(actual_name)
+        })
+    }
+
     /// Load all assets from the archive: tile atlas, wall sprite atlas, and SOTP collision data.
-    fn load_assets() -> (Option<render::TileAtlas>, Option<render::SpriteAtlas>, Option<Vec<u8>>) {
+    fn load_assets() -> (
+        Option<render::TileAtlas>,
+        Option<render::SpriteAtlas>,
+        Option<Vec<u8>>,
+    ) {
         let assets_dir = PathBuf::from("assets");
 
         let pool = match archive::AssetPool::load(&assets_dir) {
@@ -76,39 +93,90 @@ impl EditorApp {
             }
         };
 
-        let pal_data = match pool.get("legend.pal") {
-            Some(data) => data,
-            None => {
-                warn!("legend.pal not found in asset archives");
-                return (None, None, None);
-            }
-        };
-        let palette = match render::Palette::from_bytes(pal_data) {
-            Ok(p) => p,
-            Err(e) => {
-                warn!("Failed to parse palette: {}", e);
-                return (None, None, None);
-            }
-        };
-
-        // Ground tile atlas
-        let tile_atlas = match pool.get("TILEA.BMP") {
-            Some(tile_data) => match render::TileAtlas::from_raw(tile_data, &palette, 56, 27) {
-                Ok(atlas) => {
-                    let (w, h) = atlas.dimensions();
-                    info!(
-                        "Built tile atlas: {}x{} ({} tiles)",
-                        w,
-                        h,
-                        atlas.tile_count()
-                    );
-                    Some(atlas)
-                }
+        let legacy_palette = match Self::get_pool_asset_case_insensitive(&pool, "legend.pal") {
+            Some(data) => match render::Palette::from_bytes(data) {
+                Ok(p) => Some(p),
                 Err(e) => {
-                    warn!("Failed to build tile atlas: {}", e);
+                    warn!("Failed to parse legend.pal: {}", e);
                     None
                 }
             },
+            None => {
+                warn!("legend.pal not found in asset archives");
+                None
+            }
+        };
+
+        let ground_palette_lookup = LoadedPaletteLookup::from_pool(&pool, "mpt");
+        if let Some(lookup) = &ground_palette_lookup {
+            info!(
+                "Detected mpt palette-table assets ({} palettes, {} mappings)",
+                lookup.palette_count(),
+                lookup.mapping_count()
+            );
+        }
+
+        let wall_palette_lookup = LoadedPaletteLookup::from_pool(&pool, "stc");
+        if let Some(lookup) = &wall_palette_lookup {
+            info!(
+                "Detected stc palette-table assets ({} palettes, {} mappings)",
+                lookup.palette_count(),
+                lookup.mapping_count()
+            );
+        }
+
+        // Ground tile atlas
+        let tile_atlas = match Self::get_pool_asset_case_insensitive(&pool, "TILEA.BMP") {
+            Some(tile_data) => {
+                let atlas_result = if let Some(lookup) = ground_palette_lookup.as_ref() {
+                    match legacy_palette
+                        .as_ref()
+                        .or_else(|| lookup.fallback_palette())
+                    {
+                        Some(default_palette) => {
+                            info!("Rendering TILEA.BMP using mpt palette-table mode");
+                            Some(render::TileAtlas::from_raw_with_tile_palette(
+                                tile_data,
+                                56,
+                                27,
+                                |tile_index| {
+                                    lookup
+                                        .palette_for_id(tile_index + 2)
+                                        .unwrap_or(default_palette)
+                                },
+                            ))
+                        }
+                        None => {
+                            warn!("No fallback palette available for mpt palette-table rendering");
+                            None
+                        }
+                    }
+                } else if let Some(palette) = legacy_palette.as_ref() {
+                    info!("Rendering TILEA.BMP using legacy legend palette");
+                    Some(render::TileAtlas::from_raw(tile_data, palette, 56, 27))
+                } else {
+                    warn!("No usable palette found for TILEA.BMP");
+                    None
+                };
+
+                match atlas_result {
+                    Some(Ok(atlas)) => {
+                        let (w, h) = atlas.dimensions();
+                        info!(
+                            "Built tile atlas: {}x{} ({} tiles)",
+                            w,
+                            h,
+                            atlas.tile_count()
+                        );
+                        Some(atlas)
+                    }
+                    Some(Err(e)) => {
+                        warn!("Failed to build tile atlas: {}", e);
+                        None
+                    }
+                    None => None,
+                }
+            }
             None => {
                 warn!("TILEA.BMP not found in asset archives");
                 None
@@ -116,16 +184,14 @@ impl EditorApp {
         };
 
         // Wall sprite atlas from HPF files
-        let wall_atlas = Self::load_wall_atlas(&pool, &palette);
+        let wall_atlas =
+            Self::load_wall_atlas(&pool, legacy_palette.as_ref(), wall_palette_lookup.as_ref());
 
         // SOTP collision data
-        let sotp_data = pool
-            .get("SOTP.DAT")
-            .or_else(|| pool.get("sotp.dat"))
-            .map(|data| {
-                info!("Loaded SOTP.DAT ({} bytes)", data.len());
-                data.to_vec()
-            });
+        let sotp_data = Self::get_pool_asset_case_insensitive(&pool, "SOTP.DAT").map(|data| {
+            info!("Loaded SOTP.DAT ({} bytes)", data.len());
+            data.to_vec()
+        });
         if sotp_data.is_none() {
             warn!("SOTP.DAT not found in asset archives");
         }
@@ -137,7 +203,8 @@ impl EditorApp {
     /// pack into a single sprite atlas.
     fn load_wall_atlas(
         pool: &archive::AssetPool,
-        palette: &render::Palette,
+        legacy_palette: Option<&render::Palette>,
+        stc_palette_lookup: Option<&LoadedPaletteLookup>,
     ) -> Option<render::SpriteAtlas> {
         let mut sprites: Vec<Option<render::HpfSprite>> = Vec::new();
         let mut last_found = 0u32;
@@ -152,24 +219,22 @@ impl EditorApp {
             let data = pool.get(&name_lower).or_else(|| pool.get(&name_upper));
 
             match data {
-                Some(bytes) => {
-                    match render::HpfSprite::decode(bytes) {
-                        Ok(sprite) => {
-                            while sprites.len() <= id as usize {
-                                sprites.push(None);
-                            }
-                            sprites[id as usize] = Some(sprite);
-                            last_found = id;
-                            found_count += 1;
+                Some(bytes) => match render::HpfSprite::decode(bytes) {
+                    Ok(sprite) => {
+                        while sprites.len() <= id as usize {
+                            sprites.push(None);
                         }
-                        Err(e) => {
-                            warn!("Failed to decode {}: {}", name_lower, e);
-                            while sprites.len() <= id as usize {
-                                sprites.push(None);
-                            }
+                        sprites[id as usize] = Some(sprite);
+                        last_found = id;
+                        found_count += 1;
+                    }
+                    Err(e) => {
+                        warn!("Failed to decode {}: {}", name_lower, e);
+                        while sprites.len() <= id as usize {
+                            sprites.push(None);
                         }
                     }
-                }
+                },
                 None => {
                     // Allow gaps, but stop after 100 consecutive misses past last found
                     if id > last_found + 100 && found_count > 0 {
@@ -187,7 +252,30 @@ impl EditorApp {
             return None;
         }
 
-        match render::SpriteAtlas::build(&sprites, palette, 28) {
+        let atlas_result = if let Some(lookup) = stc_palette_lookup {
+            match legacy_palette.or_else(|| lookup.fallback_palette()) {
+                Some(default_palette) => {
+                    info!("Rendering STC sprites using stc palette-table mode");
+                    render::SpriteAtlas::build_with_sprite_palette(&sprites, 28, |sprite_id| {
+                        lookup
+                            .palette_for_id(sprite_id + 1)
+                            .unwrap_or(default_palette)
+                    })
+                }
+                None => {
+                    warn!("No fallback palette available for stc palette-table rendering");
+                    return None;
+                }
+            }
+        } else if let Some(palette) = legacy_palette {
+            info!("Rendering STC sprites using legacy legend palette");
+            render::SpriteAtlas::build(&sprites, palette, 28)
+        } else {
+            warn!("No usable palette found for STC wall sprite rendering");
+            return None;
+        };
+
+        match atlas_result {
             Ok(atlas) => {
                 let (w, h) = atlas.dimensions();
                 info!(

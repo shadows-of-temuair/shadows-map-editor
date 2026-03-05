@@ -29,6 +29,20 @@ impl TileAtlas {
         tile_w: u32,
         tile_h: u32,
     ) -> Result<Self, AtlasError> {
+        Self::from_raw_with_tile_palette(data, tile_w, tile_h, |_| palette)
+    }
+
+    /// Builds an RGBA atlas from raw 8-bit indexed tile data, selecting the
+    /// palette per tile index.
+    pub fn from_raw_with_tile_palette<'a, F>(
+        data: &[u8],
+        tile_w: u32,
+        tile_h: u32,
+        mut palette_for_tile: F,
+    ) -> Result<Self, AtlasError>
+    where
+        F: FnMut(u32) -> &'a Palette,
+    {
         let pixels_per_tile = (tile_w * tile_h) as usize;
         if pixels_per_tile == 0 {
             return Err(AtlasError::InvalidTileSize);
@@ -41,6 +55,9 @@ impl TileAtlas {
         }
 
         let tile_count = (data.len() / pixels_per_tile) as u32;
+        if tile_count == 0 {
+            return Err(AtlasError::NoTiles);
+        }
         let columns = ATLAS_COLUMNS.min(tile_count);
         let rows = tile_count.div_ceil(columns);
         let width = columns * tile_w;
@@ -54,6 +71,7 @@ impl TileAtlas {
 
             let atlas_x = col * tile_w;
             let atlas_y = row * tile_h;
+            let palette = palette_for_tile(tile_idx);
 
             for py in 0..tile_h {
                 for px in 0..tile_w {
@@ -141,6 +159,7 @@ impl TileAtlas {
 #[derive(Debug)]
 pub enum AtlasError {
     InvalidTileSize,
+    NoTiles,
     DataNotAligned { data_len: usize, tile_size: usize },
 }
 
@@ -148,6 +167,7 @@ impl fmt::Display for AtlasError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AtlasError::InvalidTileSize => write!(f, "tile dimensions must be non-zero"),
+            AtlasError::NoTiles => write!(f, "no tiles provided for atlas"),
             AtlasError::DataNotAligned {
                 data_len,
                 tile_size,
