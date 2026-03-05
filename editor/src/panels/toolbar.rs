@@ -3,6 +3,7 @@ use eframe::egui;
 use crate::shape::ShapeKind;
 use crate::theme::{ThemeColors, theme_colors};
 use crate::widgets::icons;
+use crate::widgets::tooltip;
 
 const TOOLBAR_WIDTH: f32 = 48.0;
 const TOOL_BUTTON_SIZE: f32 = 34.0;
@@ -33,12 +34,12 @@ impl Tool {
     pub fn tooltip(self) -> &'static str {
         match self {
             Tool::Select => "Select (V)",
-            Tool::Pencil => "Pencil (B)",
+            Tool::Pencil => "Brush (B)",
             Tool::Line => "Line (L)",
             Tool::Eraser => "Eraser (E)",
             Tool::Fill => "Fill (G)",
             Tool::Eyedropper => "Eyedropper (I)",
-            Tool::Shape => "Shape (R)",
+            Tool::Shape => "Shape (U)",
         }
     }
 
@@ -50,7 +51,7 @@ impl Tool {
             Tool::Eraser => icons::draw_icon_eraser(painter, rect, color),
             Tool::Fill => icons::draw_icon_fill(painter, rect, color),
             Tool::Eyedropper => icons::draw_icon_eyedropper(painter, rect, color),
-            Tool::Shape => icons::draw_icon_rectangle(painter, rect, color),
+            Tool::Shape => icons::draw_icon_shapes(painter, rect, color),
         }
     }
 }
@@ -153,14 +154,14 @@ impl ToolbarPanel {
                 if response.clicked() {
                     *action = toolbar_action;
                 }
-                response.on_hover_text(tooltip);
+                let _ = tooltip::attach(response, tooltip);
             }
 
             let export_response = Self::file_icon_button(ui, icons::draw_icon_export, colors);
             if export_response.clicked() {
                 *action = ToolbarAction::Export;
             }
-            export_response.on_hover_text("Export as PNG (Cmd+E)");
+            let _ = tooltip::attach(export_response, "Export as PNG (Cmd+E)");
 
             // --- Horizontal divider ---
             ui.add_space(2.0);
@@ -199,13 +200,13 @@ impl ToolbarPanel {
             if can_undo && undo_response.clicked() {
                 *action = ToolbarAction::Undo;
             }
-            undo_response.on_hover_text("Undo (Cmd+Z)");
+            let _ = tooltip::attach(undo_response, "Undo (Cmd+Z)");
 
             let redo_response = Self::icon_button(ui, icons::draw_icon_redo, colors, can_redo);
             if can_redo && redo_response.clicked() {
                 *action = ToolbarAction::Redo;
             }
-            redo_response.on_hover_text("Redo (Cmd+Shift+Z)");
+            let _ = tooltip::attach(redo_response, "Redo (Cmd+Shift+Z)");
         });
     }
 
@@ -299,7 +300,7 @@ impl ToolbarPanel {
                 }
             });
 
-        response.on_hover_text(format!("Shape: {} (R)", active_shape.label()));
+        let _ = tooltip::attach(response, format!("Shape: {} (R)", active_shape.label()));
     }
 
     fn file_icon_button(
@@ -390,6 +391,6 @@ impl ToolbarPanel {
 
         tool.draw_icon(painter, rect, icon_color);
 
-        response.on_hover_text(tool.tooltip())
+        tooltip::attach(response, tool.tooltip())
     }
 }

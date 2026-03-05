@@ -74,17 +74,12 @@ impl MapList {
 
     pub fn extract_map_id(path: &Path) -> Option<u32> {
         let stem = path.file_stem()?.to_str()?;
-        let trailing_rev: String = stem
-            .chars()
-            .rev()
-            .take_while(|ch| ch.is_ascii_digit())
-            .collect();
-
-        if trailing_rev.is_empty() {
+        let lower = stem.to_ascii_lowercase();
+        let rest = lower.strip_prefix("lod")?;
+        let digits: String = rest.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+        if digits.is_empty() {
             return None;
         }
-
-        let digits: String = trailing_rev.chars().rev().collect();
         digits.parse::<u32>().ok()
     }
 }
@@ -115,9 +110,19 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn extract_map_id_from_trailing_digits() {
+    fn extract_map_id_from_lod_prefix_digits() {
         assert_eq!(MapList::extract_map_id(Path::new("LOD185.MAP")), Some(185));
-        assert_eq!(MapList::extract_map_id(Path::new("001.map")), Some(1));
+        assert_eq!(MapList::extract_map_id(Path::new("lod300.map")), Some(300));
+        assert_eq!(
+            MapList::extract_map_id(Path::new("lod500-test.map")),
+            Some(500)
+        );
+        assert_eq!(
+            MapList::extract_map_id(Path::new("lod-whatever-43434u59837598239820.map")),
+            None
+        );
+        assert_eq!(MapList::extract_map_id(Path::new("001.map")), None);
+        assert_eq!(MapList::extract_map_id(Path::new("foo_lod200.map")), None);
         assert_eq!(MapList::extract_map_id(Path::new("foo.map")), None);
     }
 

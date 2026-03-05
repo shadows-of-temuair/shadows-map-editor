@@ -1244,7 +1244,7 @@
         (
             map_id: 300,
             map_name: "Cthonic Ruins 1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 301,
@@ -1894,7 +1894,7 @@
         (
             map_id: 500,
             map_name: "Mileth Village",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 501,
@@ -1909,12 +1909,12 @@
         (
             map_id: 503,
             map_name: "Suomi Village",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 504,
             map_name: "Undine Village",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 505,
@@ -1974,17 +1974,17 @@
         (
             map_id: 543,
             map_name: "Shinewood Forest 4",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 544,
             map_name: "Shinewood Forest 5",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 545,
             map_name: "Shinewood Forest 7",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 546,
@@ -2079,12 +2079,12 @@
         (
             map_id: 564,
             map_name: "Shinewood Forest 3",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 565,
             map_name: "Shinewood Forest 2",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 566,
@@ -2094,7 +2094,7 @@
         (
             map_id: 567,
             map_name: "Shinewood Forest 37",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 568,
@@ -2104,22 +2104,22 @@
         (
             map_id: 569,
             map_name: "Shinewood Forest 39",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 570,
             map_name: "Shinewood Forest 40",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 571,
             map_name: "Shinewood Forest 41",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 572,
             map_name: "Shinewood Forest 42",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 573,
@@ -2134,17 +2134,17 @@
         (
             map_id: 601,
             map_name: "East Woodland 3-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 602,
             map_name: "East Woodland 4-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 603,
             map_name: "East Woodland 5-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 604,
@@ -2239,187 +2239,187 @@
         (
             map_id: 622,
             map_name: "Enchanted Garden",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 623,
             map_name: "Wasteland",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 624,
             map_name: "Mine 1-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 625,
             map_name: "Mine 2-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 626,
             map_name: "Mine 7-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 627,
             map_name: "Mine 8-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 628,
             map_name: "Mine 2-2",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 629,
             map_name: "Mine 3-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 630,
             map_name: "Mine 6-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 631,
             map_name: "Mine 7-2",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 632,
             map_name: "Mine 5-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 633,
             map_name: "Mine 6-2",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 634,
             map_name: "Mine 8-2",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 635,
             map_name: "Mine 17-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 636,
             map_name: "Mine 18-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 637,
             map_name: "Mine 19-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 638,
             map_name: "Mine 9-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 639,
             map_name: "Mine 16-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 640,
             map_name: "Mine 15-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 641,
             map_name: "Mine 14-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 642,
             map_name: "Mine 10-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 643,
             map_name: "Mine 13-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 644,
             map_name: "Mine 20-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 645,
             map_name: "Mine 25-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 646,
             map_name: "Mine 26-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 648,
             map_name: "Mine 21-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 649,
             map_name: "Mine 24-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 650,
             map_name: "Mine 27-2",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 651,
             map_name: "Mine 28-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 652,
             map_name: "Mine 28-2",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 653,
             map_name: "Mine 29-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 654,
             map_name: "Mine 3-2",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 655,
             map_name: "Mine 4-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 656,
             map_name: "Mine 11-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 657,
             map_name: "Mine 12-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 658,
             map_name: "Mine 22-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 659,
             map_name: "Mine 23-1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 660,
@@ -2429,22 +2429,22 @@
         (
             map_id: 662,
             map_name: "Tagor Village",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 663,
             map_name: "Grassland Village",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 666,
             map_name: "Feasgar Village",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 667,
             map_name: "Feasgar Kingdom",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 675,
@@ -2734,7 +2734,7 @@
         (
             map_id: 948,
             map_name: "Decimated Village",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 949,
@@ -2894,7 +2894,7 @@
         (
             map_id: 989,
             map_name: "Shinewood Forest 35",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 991,
@@ -2904,17 +2904,17 @@
         (
             map_id: 992,
             map_name: "Shinewood Forest 11",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 993,
             map_name: "Shinewood Forest 33",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 994,
             map_name: "Shinewood Forest 18",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 995,
@@ -2924,7 +2924,7 @@
         (
             map_id: 996,
             map_name: "Shinewood Forest 26",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 997,
@@ -3064,42 +3064,42 @@
         (
             map_id: 2038,
             map_name: "Filth Forest 1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2039,
             map_name: "Filth Forest 2",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2040,
             map_name: "Filth Forest 3",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2041,
             map_name: "Filth Forest 4",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2046,
             map_name: "House Macabre Yard 1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2047,
             map_name: "House Macabre Yard 2",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2048,
             map_name: "House Macabre Yard 3",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2049,
             map_name: "House Macabre Yard 4",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2051,
@@ -3114,12 +3114,12 @@
         (
             map_id: 2053,
             map_name: "Filth Forest 5",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2054,
             map_name: "Filth Forest 6",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2055,
@@ -3129,7 +3129,7 @@
         (
             map_id: 2056,
             map_name: "Filth Forest 8",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2060,
@@ -3284,32 +3284,32 @@
         (
             map_id: 2090,
             map_name: "Mount Giragan 4",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2091,
             map_name: "Mount Giragan 5",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2092,
             map_name: "Mount Giragan 6",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2093,
             map_name: "Mount Giragan 7",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2094,
             map_name: "Mount Giragan 8",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2095,
             map_name: "Mount Giragan 9",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2096,
@@ -3319,12 +3319,12 @@
         (
             map_id: 2097,
             map_name: "Mount Giragan 11",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2098,
             map_name: "Mount Giragan 12",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2099,
@@ -3334,12 +3334,12 @@
         (
             map_id: 2100,
             map_name: "Mount Giragan 14",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2101,
             map_name: "Mount Giragan 15",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2102,
@@ -3349,7 +3349,7 @@
         (
             map_id: 2103,
             map_name: "Mount Giragan 17",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2104,
@@ -3369,7 +3369,7 @@
         (
             map_id: 2107,
             map_name: "Mount Giragan 21",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2108,
@@ -3384,7 +3384,7 @@
         (
             map_id: 2110,
             map_name: "Mount Giragan 24",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2111,
@@ -3399,7 +3399,7 @@
         (
             map_id: 2113,
             map_name: "Mount Giragan 27",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2114,
@@ -3414,7 +3414,7 @@
         (
             map_id: 2116,
             map_name: "Mount Giragan 30",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2117,
@@ -3429,7 +3429,7 @@
         (
             map_id: 2119,
             map_name: "Mount Giragan 33",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2120,
@@ -3439,7 +3439,7 @@
         (
             map_id: 2122,
             map_name: "Mount Giragan 12-2",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 2140,
@@ -3474,17 +3474,17 @@
         (
             map_id: 2902,
             map_name: "Veltain Mine 2",
-            map_size: "-180100",
+            map_size: (180, 100),
         ),
         (
             map_id: 2903,
             map_name: "Veltain Mine 3",
-            map_size: "-150150",
+            map_size: (150, 150),
         ),
         (
             map_id: 2904,
             map_name: "Veltain Mine 4",
-            map_size: "-150102",
+            map_size: (150, 102),
         ),
         (
             map_id: 2905,
@@ -4199,7 +4199,7 @@
         (
             map_id: 3611,
             map_name: "Chaos 12",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 3612,
@@ -4244,7 +4244,7 @@
         (
             map_id: 3620,
             map_name: "Chaos 21",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 3621,
@@ -4254,7 +4254,7 @@
         (
             map_id: 3622,
             map_name: "Chaos 23",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 3623,
@@ -4299,7 +4299,7 @@
         (
             map_id: 3631,
             map_name: "Chaos 32",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 3632,
@@ -4579,17 +4579,17 @@
         (
             map_id: 4333,
             map_name: "Grim Chaos 35",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 4334,
             map_name: "Grim Chaos 33",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 4335,
             map_name: "Grim Chaos 34",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 4600,
@@ -4784,152 +4784,152 @@
         (
             map_id: 5001,
             map_name: "Cthonic Remains 1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5002,
             map_name: "Cthonic Remains 2",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5003,
             map_name: "Cthonic Remains 3",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5004,
             map_name: "Cthonic Remains 4",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5005,
             map_name: "Cthonic Remains 5",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5006,
             map_name: "Cthonic Remains 6",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5007,
             map_name: "Cthonic Remains 7",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5008,
             map_name: "Cthonic Remains 8",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5009,
             map_name: "Cthonic Remains 9",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5010,
             map_name: "Cthonic Remains 10",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5011,
             map_name: "Cthonic Remains 11",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5012,
             map_name: "Cthonic Remains 12",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5013,
             map_name: "Cthonic Remains 13",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5014,
             map_name: "Cthonic Remains 14",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5015,
             map_name: "Cthonic Remains 15",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5016,
             map_name: "Cthonic Remains 16",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5017,
             map_name: "Cthonic Remains 17",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5018,
             map_name: "Cthonic Remains 18",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5019,
             map_name: "Cthonic Remains 19",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5020,
             map_name: "Cthonic Remains 20",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5021,
             map_name: "Cthonic Remains 21",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5022,
             map_name: "Cthonic Remains 22",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5023,
             map_name: "Cthonic Remains 23",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5024,
             map_name: "Cthonic Remains 24",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5025,
             map_name: "Cthonic Remains 25",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5026,
             map_name: "Cthonic Remains 26",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5027,
             map_name: "Cthonic Remains 27",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5028,
             map_name: "Cthonic Remains 28",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5029,
             map_name: "Cthonic Remains 29",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5030,
             map_name: "Cthonic Remains 30",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5031,
@@ -4964,7 +4964,7 @@
         (
             map_id: 5037,
             map_name: "Cthonic Remains 37",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5038,
@@ -4994,12 +4994,12 @@
         (
             map_id: 5043,
             map_name: "Cthonic Remains 43",
-            map_size: "-25150",
+            map_size: (25, 150),
         ),
         (
             map_id: 5044,
             map_name: "Cthonic Remains 44",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5045,
@@ -5019,7 +5019,7 @@
         (
             map_id: 5048,
             map_name: "Cthonic Remains 48",
-            map_size: "-20200",
+            map_size: (20, 200),
         ),
         (
             map_id: 5049,
@@ -5054,12 +5054,12 @@
         (
             map_id: 5055,
             map_name: "Cthonic Remains 55",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 5056,
             map_name: "Cthonic Remains 56",
-            map_size: "-150150",
+            map_size: (150, 150),
         ),
         (
             map_id: 5061,
@@ -5619,197 +5619,197 @@
         (
             map_id: 6042,
             map_name: "Beal na Carraige1",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6043,
             map_name: "Beal na Carraige2",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6044,
             map_name: "Beal na Carraige3",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6045,
             map_name: "Beal na Carraige4",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6046,
             map_name: "Beal na Carraige5",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6047,
             map_name: "Beal na Carraige6",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6048,
             map_name: "Beal na Carraige7",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6049,
             map_name: "Beal na Carraige8",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6050,
             map_name: "Beal na Carraige9",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6051,
             map_name: "Beal na Carraige10",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6052,
             map_name: "Beal na Carraige11",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6053,
             map_name: "Beal na Carraige12",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6054,
             map_name: "Beal na Carraige13",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6055,
             map_name: "Beal na Carraige14",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6056,
             map_name: "Beal na Carraige15",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6057,
             map_name: "Beal na Carraige16",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6058,
             map_name: "Beal na Carraige17",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6059,
             map_name: "Beal na Carraige18",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6060,
             map_name: "Beal na Carraige19",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6061,
             map_name: "Beal na Carraige20",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6062,
             map_name: "Beal na Carraige21",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6063,
             map_name: "Beal na Carraige22",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6064,
             map_name: "Beal na Carraige23",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6065,
             map_name: "Beal na Carraige24",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6066,
             map_name: "Beal na Carraige25",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6067,
             map_name: "Beal na Carraige26",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6068,
             map_name: "Beal na Carraige27",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6069,
             map_name: "Beal na Carraige28",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6070,
             map_name: "Beal na Carraige29",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6071,
             map_name: "Beal na Carraige30",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6072,
             map_name: "Beal na Carraige31",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6073,
             map_name: "Beal na Carraige32",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6074,
             map_name: "Beal na Carraige33",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6075,
             map_name: "Beal na Carraige34",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6076,
             map_name: "Beal na Carraige35",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6077,
             map_name: "Beal na Carraige36",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6078,
             map_name: "Beal na Carraige37",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6079,
             map_name: "Beal na Carraige38",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6080,
             map_name: "Beal na Carraige39",
-            map_size: "-200130",
+            map_size: (200, 130),
         ),
         (
             map_id: 6099,
@@ -6364,7 +6364,7 @@
         (
             map_id: 6228,
             map_name: "Oren Island City",
-            map_size: "-133200",
+            map_size: (133, 200),
         ),
         (
             map_id: 6229,
@@ -7204,7 +7204,7 @@
         (
             map_id: 6525,
             map_name: "Oren Island Ruins0",
-            map_size: "-100150",
+            map_size: (100, 150),
         ),
         (
             map_id: 6526,
@@ -7484,7 +7484,7 @@
         (
             map_id: 6583,
             map_name: "Sewer Maze 6",
-            map_size: "-30100",
+            map_size: (30, 100),
         ),
         (
             map_id: 6584,
@@ -8344,7 +8344,7 @@
         (
             map_id: 7011,
             map_name: "Red Dragon Bridge",
-            map_size: "-50150",
+            map_size: (50, 150),
         ),
         (
             map_id: 7012,
@@ -8529,7 +8529,7 @@
         (
             map_id: 7300,
             map_name: "Pyramid Maze",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 7301,
@@ -8834,12 +8834,12 @@
         (
             map_id: 7900,
             map_name: "Paradise 1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 7901,
             map_name: "Paradise 2",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 7902,
@@ -8849,12 +8849,12 @@
         (
             map_id: 7903,
             map_name: "Paradise 4",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 7904,
             map_name: "Low Tides",
-            map_size: "-80120",
+            map_size: (80, 120),
         ),
         (
             map_id: 7905,
@@ -9284,97 +9284,97 @@
         (
             map_id: 8300,
             map_name: "Aman Jungle (Aman Jungle0)",
-            map_size: "-130130",
+            map_size: (130, 130),
         ),
         (
             map_id: 8301,
             map_name: "Aman Jungle (Aman Jungle1)",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8302,
             map_name: "Aman Jungle (Aman Jungle2)",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8303,
             map_name: "Aman Jungle (Aman Jungle3)",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8304,
             map_name: "Aman Jungle (Aman Jungle4)",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8305,
             map_name: "Aman Jungle (Aman Jungle5)",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8306,
             map_name: "Aman Jungle (Aman Jungle6)",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8307,
             map_name: "Aman Jungle (Aman Jungle7)",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8308,
             map_name: "Aman Jungle (Aman Jungle8)",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8309,
             map_name: "Aman Jungle (Aman Jungle9)",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8310,
             map_name: "Aman Jungle (Aman Jungle10)",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8311,
             map_name: "Aman Jungle (Aman Jungle11)",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8312,
             map_name: "Aman Jungle (Aman Jungle12)",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8313,
             map_name: "Aman Jungle (Aman Jungle13)",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8314,
             map_name: "Aman Jungle (Aman Jungle14)",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8315,
             map_name: "Aman Jungle (Aman Jungle15)",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8316,
             map_name: "Aman Jungle (Aman Jungle16)",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8317,
             map_name: "Aman Jungle (Aman Jungle17)",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8318,
             map_name: "Aman Jungle (Aman Jungle18)",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8319,
@@ -9699,7 +9699,7 @@
         (
             map_id: 8429,
             map_name: "Chadul's Realm 10",
-            map_size: "-20100",
+            map_size: (20, 100),
         ),
         (
             map_id: 8430,
@@ -9719,7 +9719,7 @@
         (
             map_id: 8433,
             map_name: "Chadul's Mileth 2",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8434,
@@ -9844,7 +9844,7 @@
         (
             map_id: 8984,
             map_name: "Lost Ruins 6",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 8985,
@@ -9869,7 +9869,7 @@
         (
             map_id: 8989,
             map_name: "Lost Ruins 4",
-            map_size: "-50100",
+            map_size: (50, 100),
         ),
         (
             map_id: 8990,
@@ -9889,7 +9889,7 @@
         (
             map_id: 8993,
             map_name: "Lost Ruins 3",
-            map_size: "-50100",
+            map_size: (50, 100),
         ),
         (
             map_id: 8994,
@@ -10389,7 +10389,7 @@
         (
             map_id: 10055,
             map_name: "Noam Village",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 10056,
@@ -11309,32 +11309,32 @@
         (
             map_id: 10260,
             map_name: "Andor Dungeon",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 10261,
             map_name: "Desert Dunes 1",
-            map_size: "-150100",
+            map_size: (150, 100),
         ),
         (
             map_id: 10262,
             map_name: "Desert Dunes 2",
-            map_size: "-150100",
+            map_size: (150, 100),
         ),
         (
             map_id: 10263,
             map_name: "Alsaids Fire Canyon 1",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 10264,
             map_name: "Alsaids Fire Canyon 2",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 10265,
             map_name: "Hwarone City",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 10266,
@@ -11834,7 +11834,7 @@
         (
             map_id: 11500,
             map_name: "Tavaly Village",
-            map_size: "-100100",
+            map_size: (100, 100),
         ),
         (
             map_id: 11501,

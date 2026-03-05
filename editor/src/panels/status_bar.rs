@@ -3,6 +3,7 @@ use eframe::egui;
 use crate::panels::MapSizeDialog;
 use crate::panels::Tool;
 use crate::theme::{ThemeColors, theme_colors};
+use crate::widgets::tooltip;
 
 const STATUS_BAR_HEIGHT: f32 = 28.0;
 
@@ -20,6 +21,10 @@ pub struct StatusBarPanel {
 }
 
 impl StatusBarPanel {
+    fn plain_status_text(status_message: &str) -> String {
+        status_message.trim_end_matches('.').to_string()
+    }
+
     pub fn is_size_dialog_open(&self) -> bool {
         self.size_dialog.is_open()
     }
@@ -74,7 +79,7 @@ impl StatusBarPanel {
 
                     // Status (left, accent)
                     ui.label(
-                        egui::RichText::new(status_message)
+                        egui::RichText::new(Self::plain_status_text(status_message))
                             .size(13.0)
                             .color(colors.accent),
                     );
@@ -257,7 +262,7 @@ impl StatusBarPanel {
             text_color,
         );
 
-        response.clone().on_hover_text(tooltip);
+        let _ = tooltip::attach(response.clone(), tooltip);
         response.clicked()
     }
 
