@@ -4,6 +4,7 @@ use eframe::egui;
 use tracing::{info, warn};
 
 use crate::document::{LayerVisibility, MapDocument};
+use crate::palette_lookup::LoadedPaletteLookup;
 use crate::panels::{
     ExportDialog, ExportDialogAction, InspectorPanel, StatusBarAction, StatusBarPanel,
     TabBarAction, TabBarPanel, TitleBarPanel, Tool, ToolbarAction, ToolbarPanel, ViewportPanel,
@@ -25,6 +26,7 @@ pub struct EditorApp {
     sotp_data: Option<Vec<u8>>,
     hover_tile: (u16, u16),
     selected_tile: Option<(u16, u16)>,
+    selected_ground_tile: u16,
     export_dialog: ExportDialog,
     status_message: String,
     atlas_needs_upload: bool,
@@ -38,6 +40,7 @@ impl EditorApp {
         // Build atlases CPU-side; texture uploads are deferred to first frame
         // because the renderer hasn't reported the real GPU max texture size yet.
         let (tile_atlas, wall_atlas, sotp_data) = Self::load_assets();
+        let selected_ground_tile = if tile_atlas.is_some() { 1 } else { 0 };
 
         Self {
             documents: vec![MapDocument::new(50, 50)],
@@ -55,13 +58,30 @@ impl EditorApp {
             wall_texture: None,
             hover_tile: (0, 0),
             selected_tile: None,
+            selected_ground_tile,
             export_dialog: ExportDialog::default(),
             status_message: String::from("Ready"),
         }
     }
 
+    fn get_pool_asset_case_insensitive<'a>(
+        pool: &'a archive::AssetPool,
+        name: &str,
+    ) -> Option<&'a [u8]> {
+        pool.get(name).or_else(|| {
+            let actual_name = pool
+                .names()
+                .find(|entry| entry.eq_ignore_ascii_case(name))?;
+            pool.get(actual_name)
+        })
+    }
+
     /// Load all assets from the archive: tile atlas, wall sprite atlas, and SOTP collision data.
-    fn load_assets() -> (Option<render::TileAtlas>, Option<render::SpriteAtlas>, Option<Vec<u8>>) {
+    fn load_assets() -> (
+        Option<render::TileAtlas>,
+        Option<render::SpriteAtlas>,
+        Option<Vec<u8>>,
+    ) {
         let assets_dir = PathBuf::from("assets");
 
         let pool = match archive::AssetPool::load(&assets_dir) {
@@ -76,39 +96,81 @@ impl EditorApp {
             }
         };
 
-        let pal_data = match pool.get("legend.pal") {
-            Some(data) => data,
-            None => {
-                warn!("legend.pal not found in asset archives");
-                return (None, None, None);
-            }
-        };
-        let palette = match render::Palette::from_bytes(pal_data) {
-            Ok(p) => p,
-            Err(e) => {
-                warn!("Failed to parse palette: {}", e);
-                return (None, None, None);
-            }
-        };
-
-        // Ground tile atlas
-        let tile_atlas = match pool.get("TILEA.BMP") {
-            Some(tile_data) => match render::TileAtlas::from_raw(tile_data, &palette, 56, 27) {
-                Ok(atlas) => {
-                    let (w, h) = atlas.dimensions();
-                    info!(
-                        "Built tile atlas: {}x{} ({} tiles)",
-                        w,
-                        h,
-                        atlas.tile_count()
-                    );
-                    Some(atlas)
-                }
+        let legacy_palette = match Self::get_pool_asset_case_insensitive(&pool, "legend.pal") {
+            Some(data) => match render::Palette::from_bytes(data) {
+                Ok(p) => Some(p),
                 Err(e) => {
-                    warn!("Failed to build tile atlas: {}", e);
+                    warn!("Failed to parse legend.pal: {}", e);
                     None
                 }
             },
+            None => {
+                warn!("legend.pal not found in asset archives");
+                None
+            }
+        };
+
+        let ground_palette_lookup = LoadedPaletteLookup::from_pool(&pool, "mpt");
+        if let Some(lookup) = &ground_palette_lookup {
+            info!(
+                "Detected mpt palette-table assets ({} palettes, {} mappings)",
+                lookup.palette_count(),
+                lookup.mapping_count()
+            );
+        }
+
+        // Ground tile atlas
+        let tile_atlas = match Self::get_pool_asset_case_insensitive(&pool, "TILEA.BMP") {
+            Some(tile_data) => {
+                let atlas_result = if let Some(lookup) = ground_palette_lookup.as_ref() {
+                    match legacy_palette
+                        .as_ref()
+                        .or_else(|| lookup.fallback_palette())
+                    {
+                        Some(default_palette) => {
+                            info!("Rendering TILEA.BMP using mpt palette-table mode");
+                            Some(render::TileAtlas::from_raw_with_tile_palette(
+                                tile_data,
+                                56,
+                                27,
+                                |tile_index| {
+                                    lookup
+                                        .palette_for_id(tile_index + 2)
+                                        .unwrap_or(default_palette)
+                                },
+                            ))
+                        }
+                        None => {
+                            warn!("No fallback palette available for mpt palette-table rendering");
+                            None
+                        }
+                    }
+                } else if let Some(palette) = legacy_palette.as_ref() {
+                    info!("Rendering TILEA.BMP using legacy legend palette");
+                    Some(render::TileAtlas::from_raw(tile_data, palette, 56, 27))
+                } else {
+                    warn!("No usable palette found for TILEA.BMP");
+                    None
+                };
+
+                match atlas_result {
+                    Some(Ok(atlas)) => {
+                        let (w, h) = atlas.dimensions();
+                        info!(
+                            "Built tile atlas: {}x{} ({} tiles)",
+                            w,
+                            h,
+                            atlas.tile_count()
+                        );
+                        Some(atlas)
+                    }
+                    Some(Err(e)) => {
+                        warn!("Failed to build tile atlas: {}", e);
+                        None
+                    }
+                    None => None,
+                }
+            }
             None => {
                 warn!("TILEA.BMP not found in asset archives");
                 None
@@ -116,16 +178,19 @@ impl EditorApp {
         };
 
         // Wall sprite atlas from HPF files
-        let wall_atlas = Self::load_wall_atlas(&pool, &palette);
+        let wall_atlas = match legacy_palette.as_ref() {
+            Some(palette) => Self::load_wall_atlas(&pool, palette),
+            None => {
+                warn!("No legacy palette available for STC wall sprite rendering");
+                None
+            }
+        };
 
         // SOTP collision data
-        let sotp_data = pool
-            .get("SOTP.DAT")
-            .or_else(|| pool.get("sotp.dat"))
-            .map(|data| {
-                info!("Loaded SOTP.DAT ({} bytes)", data.len());
-                data.to_vec()
-            });
+        let sotp_data = Self::get_pool_asset_case_insensitive(&pool, "SOTP.DAT").map(|data| {
+            info!("Loaded SOTP.DAT ({} bytes)", data.len());
+            data.to_vec()
+        });
         if sotp_data.is_none() {
             warn!("SOTP.DAT not found in asset archives");
         }
@@ -152,24 +217,22 @@ impl EditorApp {
             let data = pool.get(&name_lower).or_else(|| pool.get(&name_upper));
 
             match data {
-                Some(bytes) => {
-                    match render::HpfSprite::decode(bytes) {
-                        Ok(sprite) => {
-                            while sprites.len() <= id as usize {
-                                sprites.push(None);
-                            }
-                            sprites[id as usize] = Some(sprite);
-                            last_found = id;
-                            found_count += 1;
+                Some(bytes) => match render::HpfSprite::decode(bytes) {
+                    Ok(sprite) => {
+                        while sprites.len() <= id as usize {
+                            sprites.push(None);
                         }
-                        Err(e) => {
-                            warn!("Failed to decode {}: {}", name_lower, e);
-                            while sprites.len() <= id as usize {
-                                sprites.push(None);
-                            }
+                        sprites[id as usize] = Some(sprite);
+                        last_found = id;
+                        found_count += 1;
+                    }
+                    Err(e) => {
+                        warn!("Failed to decode {}: {}", name_lower, e);
+                        while sprites.len() <= id as usize {
+                            sprites.push(None);
                         }
                     }
-                }
+                },
                 None => {
                     // Allow gaps, but stop after 100 consecutive misses past last found
                     if id > last_found + 100 && found_count > 0 {
@@ -303,26 +366,100 @@ impl EditorApp {
     }
 
     fn save_document(&mut self) {
-        if self.documents[self.active_tab].path.is_some() {
-            if let Err(e) = self.documents[self.active_tab].save() {
-                warn!("Failed to save: {}", e);
+        let Some(path) = self.prompt_save_path_for_active_document() else {
+            return;
+        };
+
+        let filename = path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or("map")
+            .to_owned();
+
+        self.documents[self.active_tab].path = Some(path.clone());
+        match self.documents[self.active_tab].save() {
+            Ok(()) => {
+                info!("Saved map: {}", path.display());
+                self.status_message = format!("Saved {}.", filename);
             }
-        } else {
-            self.save_document_as();
+            Err(e) => {
+                warn!("Failed to save {}: {}", path.display(), e);
+                self.status_message = format!("Save failed: {}", e);
+            }
         }
     }
 
     fn save_document_as(&mut self) {
-        let file = rfd::FileDialog::new()
-            .add_filter("Map", &["map"])
-            .save_file();
+        let Some(path) = self.prompt_save_path_for_active_document() else {
+            return;
+        };
 
-        if let Some(path) = file {
-            match self.documents[self.active_tab].save_as(path.clone()) {
-                Ok(()) => info!("Saved map: {}", path.display()),
-                Err(e) => warn!("Failed to save as {}: {}", path.display(), e),
+        let filename = path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or("map")
+            .to_owned();
+
+        match self.documents[self.active_tab].save_as(path.clone()) {
+            Ok(()) => {
+                info!("Saved map as: {}", path.display());
+                self.status_message = format!("Saved {}.", filename);
+            }
+            Err(e) => {
+                warn!("Failed to save as {}: {}", path.display(), e);
+                self.status_message = format!("Save failed: {}", e);
             }
         }
+    }
+
+    fn prompt_save_path_for_active_document(&self) -> Option<PathBuf> {
+        let doc = &self.documents[self.active_tab];
+        let suggested = Self::suggested_map_filename(doc);
+
+        let mut dialog = rfd::FileDialog::new()
+            .add_filter("Map", &["map"])
+            .set_file_name(&suggested);
+
+        if let Some(parent) = doc.path.as_ref().and_then(|p| p.parent()) {
+            dialog = dialog.set_directory(parent);
+        }
+
+        dialog.save_file().map(Self::ensure_map_extension)
+    }
+
+    fn suggested_map_filename(doc: &MapDocument) -> String {
+        let mut name = doc
+            .path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| {
+                let base = doc.display_name();
+                if base.eq_ignore_ascii_case("Untitled") {
+                    String::from("untitled.map")
+                } else {
+                    format!("{base}.map")
+                }
+            });
+
+        if !name.to_ascii_lowercase().ends_with(".map") {
+            name.push_str(".map");
+        }
+
+        name
+    }
+
+    fn ensure_map_extension(mut path: PathBuf) -> PathBuf {
+        let has_map_ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("map"))
+            .unwrap_or(false);
+        if !has_map_ext {
+            path.set_extension("map");
+        }
+        path
     }
 
     fn close_tab(&mut self, index: usize) {
@@ -342,68 +479,80 @@ impl EditorApp {
     }
 
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
-        let (new, open, save, save_as, close, export, tool, toggle_layer, keyboard_zoom, reset_zoom) =
-            ctx.input(|i| {
-                let cmd = i.modifiers.command;
-                let shift = i.modifiers.shift;
+        let (
+            new,
+            open,
+            save,
+            save_as,
+            close,
+            export,
+            tool,
+            toggle_layer,
+            keyboard_zoom,
+            reset_zoom,
+        ) = ctx.input(|i| {
+            let cmd = i.modifiers.command;
+            let shift = i.modifiers.shift;
 
-                // Tool shortcuts (no modifiers) — only Select is enabled for now
-                let tool = if !cmd && !shift {
-                    if i.key_pressed(egui::Key::V) {
-                        Some(Tool::Select)
-                    } else {
-                        None
-                    }
+            // Tool shortcuts (no modifiers)
+            let tool = if !cmd && !shift {
+                if i.key_pressed(egui::Key::V) {
+                    Some(Tool::Select)
+                } else if i.key_pressed(egui::Key::B) {
+                    Some(Tool::Pencil)
                 } else {
                     None
-                };
+                }
+            } else {
+                None
+            };
 
-                // Layer/grid toggle shortcuts (Cmd+1/2/3/4)
-                let toggle_layer = if cmd && !shift {
-                    if i.key_pressed(egui::Key::Num1) {
-                        Some(1)
-                    } else if i.key_pressed(egui::Key::Num2) {
-                        Some(2)
-                    } else if i.key_pressed(egui::Key::Num3) {
-                        Some(3)
-                    } else if i.key_pressed(egui::Key::Num4) {
-                        Some(4)
-                    } else {
-                        None
-                    }
+            // Layer/grid toggle shortcuts (Cmd+1/2/3/4)
+            let toggle_layer = if cmd && !shift {
+                if i.key_pressed(egui::Key::Num1) {
+                    Some(1)
+                } else if i.key_pressed(egui::Key::Num2) {
+                    Some(2)
+                } else if i.key_pressed(egui::Key::Num3) {
+                    Some(3)
+                } else if i.key_pressed(egui::Key::Num4) {
+                    Some(4)
                 } else {
                     None
-                };
+                }
+            } else {
+                None
+            };
 
-                // Keyboard zoom (Cmd+/-, snap to 25%; Cmd+0 reset)
-                let keyboard_zoom: Option<i8> = if cmd && !shift {
-                    if i.key_pressed(egui::Key::Minus) {
-                        Some(-1)
-                    } else if i.key_pressed(egui::Key::Plus)
-                        || i.key_pressed(egui::Key::Equals)
-                    {
-                        Some(1)
-                    } else {
-                        None
-                    }
+            // Keyboard zoom (Cmd+/-, snap to 25%; Cmd+0 reset)
+            let keyboard_zoom: Option<i8> = if cmd && !shift {
+                if i.key_pressed(egui::Key::Minus) {
+                    Some(-1)
+                } else if i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals) {
+                    Some(1)
                 } else {
                     None
-                };
-                let reset_zoom = cmd && !shift && i.key_pressed(egui::Key::Num0);
+                }
+            } else {
+                None
+            };
+            let reset_zoom = cmd && !shift && i.key_pressed(egui::Key::Num0);
+            let save = cmd && !shift && i.key_pressed(egui::Key::S);
+            let save_as = cmd && shift && i.key_pressed(egui::Key::S);
 
-                (
-                    cmd && i.key_pressed(egui::Key::N),
-                    cmd && i.key_pressed(egui::Key::O),
-                    false, // Save disabled for now
-                    false, // Save As disabled for now
-                    cmd && i.key_pressed(egui::Key::W),
-                    cmd && i.key_pressed(egui::Key::E),
-                    tool,
-                    toggle_layer,
-                    keyboard_zoom,
-                    reset_zoom,
-                )
-            });
+            (
+                cmd && i.key_pressed(egui::Key::N),
+                cmd && i.key_pressed(egui::Key::O),
+                save,
+                save_as,
+                cmd && i.key_pressed(egui::Key::W),
+                cmd && i.key_pressed(egui::Key::E),
+                tool,
+                toggle_layer,
+                keyboard_zoom,
+                reset_zoom,
+            )
+        });
 
         if let Some(t) = tool {
             self.active_tool = t;
@@ -439,7 +588,8 @@ impl EditorApp {
         }
         if save_as {
             self.save_document_as();
-        } else if save {
+        }
+        if save {
             self.save_document();
         }
         if export {
@@ -458,9 +608,10 @@ impl EditorApp {
                     continue;
                 }
                 // Check if already open — just switch to it
-                let already_open = self.documents.iter().position(|doc| {
-                    doc.path.as_ref() == Some(&path)
-                });
+                let already_open = self
+                    .documents
+                    .iter()
+                    .position(|doc| doc.path.as_ref() == Some(&path));
                 if let Some(i) = already_open {
                     self.active_tab = i;
                     continue;
@@ -550,6 +701,7 @@ impl eframe::App for EditorApp {
         match toolbar_action {
             ToolbarAction::NewFile => self.new_document(),
             ToolbarAction::OpenFile => self.open_document(),
+            ToolbarAction::SaveFile => self.save_document(),
             ToolbarAction::Export => {
                 let doc_name = self.documents[self.active_tab].display_name();
                 self.export_dialog.open_for(&doc_name);
@@ -560,9 +712,9 @@ impl eframe::App for EditorApp {
         // Export dialog
         {
             let doc = &self.documents[self.active_tab];
-            let export_action =
-                self.export_dialog
-                    .show(ctx, &doc.map, self.wall_atlas.as_ref());
+            let export_action = self
+                .export_dialog
+                .show(ctx, &doc.map, self.wall_atlas.as_ref());
             match export_action {
                 ExportDialogAction::Export {
                     path,
@@ -624,7 +776,14 @@ impl eframe::App for EditorApp {
         // Inspector: tileset + tab map
         {
             let doc = &self.documents[self.active_tab];
-            InspectorPanel::show(ctx, &doc.map, self.sotp_data.as_deref());
+            InspectorPanel::show(
+                ctx,
+                &doc.map,
+                self.sotp_data.as_deref(),
+                self.tile_atlas.as_ref(),
+                self.atlas_texture.as_ref(),
+                &mut self.selected_ground_tile,
+            );
         }
 
         // Viewport needs mutable access to camera for panning
@@ -633,6 +792,8 @@ impl eframe::App for EditorApp {
             ctx,
             &doc.map,
             &mut doc.camera,
+            self.active_tool,
+            self.selected_ground_tile,
             self.tile_atlas.as_ref(),
             self.atlas_texture.as_ref(),
             self.wall_atlas.as_ref(),
@@ -645,6 +806,15 @@ impl eframe::App for EditorApp {
         }
         if let Some(tile) = vp_result.clicked_tile {
             self.selected_tile = Some(tile);
+        }
+        if let Some((col, row)) = vp_result.painted_tile {
+            let idx = row as usize * doc.map.width as usize + col as usize;
+            if let Some(tile) = doc.map.tiles.get_mut(idx) {
+                if tile.ground != self.selected_ground_tile {
+                    tile.ground = self.selected_ground_tile;
+                    doc.dirty = true;
+                }
+            }
         }
     }
 }

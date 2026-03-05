@@ -1,5 +1,6 @@
 use eframe::egui;
 
+use super::toolbar::Tool;
 use crate::document::{Camera, LayerVisibility};
 use crate::theme::{ThemeColors, theme_colors};
 
@@ -19,6 +20,7 @@ fn is_rendered_wall(id: u16) -> bool {
 pub struct ViewportResult {
     pub hover_tile: Option<(u16, u16)>,
     pub clicked_tile: Option<(u16, u16)>,
+    pub painted_tile: Option<(u16, u16)>,
 }
 
 pub struct ViewportPanel;
@@ -28,6 +30,8 @@ impl ViewportPanel {
         ctx: &egui::Context,
         map: &map::Map,
         camera: &mut Camera,
+        active_tool: Tool,
+        selected_ground_tile: u16,
         tile_atlas: Option<&render::TileAtlas>,
         atlas_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
@@ -46,8 +50,11 @@ impl ViewportPanel {
             )
             .show(ctx, |ui| {
                 let rect = ui.max_rect();
-                let response =
-                    ui.interact(rect, ui.id().with("viewport"), egui::Sense::click_and_drag());
+                let response = ui.interact(
+                    rect,
+                    ui.id().with("viewport"),
+                    egui::Sense::click_and_drag(),
+                );
 
                 // Right-click or middle-click drag panning
                 let is_panning = response.dragged_by(egui::PointerButton::Secondary)
@@ -113,17 +120,43 @@ impl ViewportPanel {
                     Self::draw_grid(&painter, map, origin, half_w, half_h);
                 }
 
+                let overlay_rect = Self::overlay_rect(rect);
+
                 // Mouse → tile hover and click selection
                 if let Some(pointer_pos) = response.hover_pos() {
-                    let tile = Self::screen_to_tile(pointer_pos, origin, half_w, half_h, map);
-                    if let Some((col, row)) = tile {
-                        result.hover_tile = Some((col, row));
-                        if response.clicked() {
-                            result.clicked_tile = Some((col, row));
+                    if !overlay_rect.contains(pointer_pos) {
+                        let tile = Self::screen_to_tile(pointer_pos, origin, half_w, half_h, map);
+                        if let Some((col, row)) = tile {
+                            result.hover_tile = Some((col, row));
+
+                            if active_tool == Tool::Pencil && selected_ground_tile != 0 {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                                Self::draw_ground_preview(
+                                    &painter,
+                                    col,
+                                    row,
+                                    origin,
+                                    half_w,
+                                    half_h,
+                                    tile_atlas,
+                                    atlas_texture,
+                                    selected_ground_tile,
+                                );
+                                let is_primary_painting = response.is_pointer_button_down_on()
+                                    && ui.input(|i| {
+                                        i.pointer.button_down(egui::PointerButton::Primary)
+                                    });
+                                if is_primary_painting {
+                                    result.painted_tile = Some((col, row));
+                                }
+                            } else if response.clicked_by(egui::PointerButton::Primary) {
+                                result.clicked_tile = Some((col, row));
+                            }
+
+                            Self::draw_tile_highlight(
+                                &painter, col, row, origin, half_w, half_h, &colors,
+                            );
                         }
-                        Self::draw_tile_highlight(
-                            &painter, col, row, origin, half_w, half_h, &colors,
-                        );
                     }
                 }
 
@@ -180,17 +213,14 @@ impl ViewportPanel {
 
             for row in row_min..=row_max {
                 let col = depth - row;
-                let tile =
-                    &map.tiles[row as usize * map.width as usize + col as usize];
+                let tile = &map.tiles[row as usize * map.width as usize + col as usize];
 
                 let cx = origin.x + (col as f32 - row as f32) * half_w;
                 let cy = origin.y + (col as f32 + row as f32) * half_h;
 
                 // --- Ground ---
                 if layers.ground && tile.ground != 0 {
-                    if let (Some(atlas), Some(mesh)) =
-                        (tile_atlas, ground_mesh.as_mut())
-                    {
+                    if let (Some(atlas), Some(mesh)) = (tile_atlas, ground_mesh.as_mut()) {
                         let atlas_index = (tile.ground - 1) as u32;
                         let tile_rect = egui::Rect::from_min_size(
                             egui::pos2(cx - half_w, cy),
@@ -202,11 +232,7 @@ impl ViewportPanel {
                                     egui::pos2(u0, v0),
                                     egui::pos2(u1, v1),
                                 );
-                                mesh.add_rect_with_uv(
-                                    tile_rect,
-                                    uv,
-                                    egui::Color32::WHITE,
-                                );
+                                mesh.add_rect_with_uv(tile_rect, uv, egui::Color32::WHITE);
                             }
                         }
                     }
@@ -216,9 +242,7 @@ impl ViewportPanel {
 
                 // --- Left wall ---
                 if layers.left_wall && is_rendered_wall(tile.left_wall) {
-                    if let (Some(atlas), Some(mesh)) =
-                        (wall_atlas, wall_mesh.as_mut())
-                    {
+                    if let (Some(atlas), Some(mesh)) = (wall_atlas, wall_mesh.as_mut()) {
                         let idx = tile.left_wall as u32;
                         let sh = atlas.sprite_height(idx);
                         if sh > 0 {
@@ -233,11 +257,7 @@ impl ViewportPanel {
                                         egui::pos2(u0, v0),
                                         egui::pos2(u1, v1),
                                     );
-                                    mesh.add_rect_with_uv(
-                                        sprite_rect,
-                                        uv,
-                                        egui::Color32::WHITE,
-                                    );
+                                    mesh.add_rect_with_uv(sprite_rect, uv, egui::Color32::WHITE);
                                 }
                             }
                         }
@@ -246,9 +266,7 @@ impl ViewportPanel {
 
                 // --- Right wall ---
                 if layers.right_wall && is_rendered_wall(tile.right_wall) {
-                    if let (Some(atlas), Some(mesh)) =
-                        (wall_atlas, wall_mesh.as_mut())
-                    {
+                    if let (Some(atlas), Some(mesh)) = (wall_atlas, wall_mesh.as_mut()) {
                         let idx = tile.right_wall as u32;
                         let sh = atlas.sprite_height(idx);
                         if sh > 0 {
@@ -263,11 +281,7 @@ impl ViewportPanel {
                                         egui::pos2(u0, v0),
                                         egui::pos2(u1, v1),
                                     );
-                                    mesh.add_rect_with_uv(
-                                        sprite_rect,
-                                        uv,
-                                        egui::Color32::WHITE,
-                                    );
+                                    mesh.add_rect_with_uv(sprite_rect, uv, egui::Color32::WHITE);
                                 }
                             }
                         }
@@ -303,37 +317,24 @@ impl ViewportPanel {
         let pad = 6.0;
         let gap = 4.0;
 
-        let total_w = pad + grid_w + gap + sep_w + gap + layer_w * 3.0 + gap * 2.0 + pad;
-        let total_h = pad * 2.0 + btn_h;
-
-        let overlay_rect = egui::Rect::from_min_size(
-            egui::pos2(
-                viewport_rect.right() - total_w - 12.0,
-                viewport_rect.top() + 12.0,
-            ),
-            egui::vec2(total_w, total_h),
-        );
+        let overlay_rect = Self::overlay_rect(viewport_rect);
 
         let btn_y = overlay_rect.top() + pad;
         let mut x = overlay_rect.left() + pad;
 
         // Compute all rects first
-        let grid_rect =
-            egui::Rect::from_min_size(egui::pos2(x, btn_y), egui::vec2(grid_w, btn_h));
+        let grid_rect = egui::Rect::from_min_size(egui::pos2(x, btn_y), egui::vec2(grid_w, btn_h));
         x += grid_w + gap;
 
-        let sep_rect = egui::Rect::from_min_size(
-            egui::pos2(x, btn_y + 2.0),
-            egui::vec2(sep_w, btn_h - 4.0),
-        );
+        let sep_rect =
+            egui::Rect::from_min_size(egui::pos2(x, btn_y + 2.0), egui::vec2(sep_w, btn_h - 4.0));
         x += sep_w + gap;
 
         let ground_rect =
             egui::Rect::from_min_size(egui::pos2(x, btn_y), egui::vec2(layer_w, btn_h));
         x += layer_w + gap;
 
-        let left_rect =
-            egui::Rect::from_min_size(egui::pos2(x, btn_y), egui::vec2(layer_w, btn_h));
+        let left_rect = egui::Rect::from_min_size(egui::pos2(x, btn_y), egui::vec2(layer_w, btn_h));
         x += layer_w + gap;
 
         let right_rect =
@@ -429,6 +430,25 @@ impl ViewportPanel {
         response.on_hover_text(tooltip);
     }
 
+    fn overlay_rect(viewport_rect: egui::Rect) -> egui::Rect {
+        let btn_h = 24.0;
+        let grid_w = 42.0;
+        let layer_w = 26.0;
+        let sep_w = 1.0;
+        let pad = 6.0;
+        let gap = 4.0;
+        let total_w = pad + grid_w + gap + sep_w + gap + layer_w * 3.0 + gap * 2.0 + pad;
+        let total_h = pad * 2.0 + btn_h;
+
+        egui::Rect::from_min_size(
+            egui::pos2(
+                viewport_rect.right() - total_w - 12.0,
+                viewport_rect.top() + 12.0,
+            ),
+            egui::vec2(total_w, total_h),
+        )
+    }
+
     fn handle_arrow_keys(ui: &egui::Ui, camera: &mut Camera) {
         let step = map::TILE_WIDTH * camera.zoom;
 
@@ -476,7 +496,6 @@ impl ViewportPanel {
             x += grid_spacing;
         }
     }
-
 
     fn draw_grid(
         painter: &egui::Painter,
@@ -561,5 +580,45 @@ impl ViewportPanel {
         painter.line_segment([right, bottom], stroke);
         painter.line_segment([bottom, left], stroke);
         painter.line_segment([left, top], stroke);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_ground_preview(
+        painter: &egui::Painter,
+        col: u16,
+        row: u16,
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+        tile_atlas: Option<&render::TileAtlas>,
+        tile_texture: Option<&egui::TextureHandle>,
+        selected_ground_tile: u16,
+    ) {
+        let (atlas, texture) = match (tile_atlas, tile_texture) {
+            (Some(a), Some(t)) => (a, t),
+            _ => return,
+        };
+
+        let atlas_index = selected_ground_tile.saturating_sub(1) as u32;
+        let (u0, v0, u1, v1) = match atlas.tile_uv(atlas_index) {
+            Some(uv) => uv,
+            None => return,
+        };
+
+        let cx = origin.x + (col as f32 - row as f32) * half_w;
+        let cy = origin.y + (col as f32 + row as f32) * half_h;
+        let tile_rect = egui::Rect::from_min_size(
+            egui::pos2(cx - half_w, cy),
+            egui::vec2(half_w * 2.0, half_h * 2.0),
+        );
+        let uv = egui::Rect::from_min_max(egui::pos2(u0, v0), egui::pos2(u1, v1));
+
+        let mut mesh = egui::Mesh::with_texture(texture.id());
+        mesh.add_rect_with_uv(
+            tile_rect,
+            uv,
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180),
+        );
+        painter.add(egui::Shape::mesh(mesh));
     }
 }

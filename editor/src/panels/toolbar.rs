@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use crate::theme::{ThemeColors, theme_colors};
+use crate::theme::{theme_colors, ThemeColors};
 use crate::widgets::icons;
 
 const TOOLBAR_WIDTH: f32 = 48.0;
@@ -11,6 +11,7 @@ pub enum ToolbarAction {
     None,
     NewFile,
     OpenFile,
+    SaveFile,
     Export,
 }
 
@@ -106,6 +107,11 @@ impl ToolbarPanel {
                     "Open (Cmd+O)",
                     ToolbarAction::OpenFile,
                 ),
+                (
+                    icons::draw_icon_save,
+                    "Save (Cmd+S)",
+                    ToolbarAction::SaveFile,
+                ),
             ];
 
             for &(draw_fn, tooltip, toolbar_action) in file_ops {
@@ -116,8 +122,6 @@ impl ToolbarPanel {
                 response.on_hover_text(tooltip);
             }
 
-            // Disabled file ops
-            Self::disabled_icon_button(ui, icons::draw_icon_save, "Save (coming soon)", colors);
             let export_response = Self::file_icon_button(ui, icons::draw_icon_export, colors);
             if export_response.clicked() {
                 *action = ToolbarAction::Export;
@@ -126,48 +130,33 @@ impl ToolbarPanel {
 
             // --- Horizontal divider ---
             ui.add_space(2.0);
-            let (divider_rect, _) = ui.allocate_exact_size(
-                egui::vec2(TOOL_BUTTON_SIZE, 1.0),
-                egui::Sense::hover(),
-            );
+            let (divider_rect, _) =
+                ui.allocate_exact_size(egui::vec2(TOOL_BUTTON_SIZE, 1.0), egui::Sense::hover());
             ui.painter().rect_filled(divider_rect, 0.0, colors.border);
             ui.add_space(2.0);
 
             // --- Drawing tools ---
-            // Select is active; others are disabled placeholders for now
-            {
-                let is_active = *active_tool == Tool::Select;
-                let response = Self::tool_button(ui, Tool::Select, is_active, colors);
+            for &tool in &[Tool::Select, Tool::Pencil] {
+                let is_active = *active_tool == tool;
+                let response = Self::tool_button(ui, tool, is_active, colors);
                 if response.clicked() {
-                    *active_tool = Tool::Select;
+                    *active_tool = tool;
                 }
             }
-            for &tool in &[Tool::Pencil, Tool::Eraser, Tool::Fill, Tool::Eyedropper, Tool::Rectangle] {
+            for &tool in &[Tool::Eraser, Tool::Fill, Tool::Eyedropper, Tool::Rectangle] {
                 Self::disabled_tool_button(ui, tool, colors);
             }
 
             // --- Divider ---
             ui.add_space(2.0);
-            let (divider_rect2, _) = ui.allocate_exact_size(
-                egui::vec2(TOOL_BUTTON_SIZE, 1.0),
-                egui::Sense::hover(),
-            );
+            let (divider_rect2, _) =
+                ui.allocate_exact_size(egui::vec2(TOOL_BUTTON_SIZE, 1.0), egui::Sense::hover());
             ui.painter().rect_filled(divider_rect2, 0.0, colors.border);
             ui.add_space(2.0);
 
             // --- Undo / Redo (placeholder, disabled) ---
-            Self::disabled_icon_button(
-                ui,
-                icons::draw_icon_undo,
-                "Undo (Cmd+Z)",
-                colors,
-            );
-            Self::disabled_icon_button(
-                ui,
-                icons::draw_icon_redo,
-                "Redo (Cmd+Shift+Z)",
-                colors,
-            );
+            Self::disabled_icon_button(ui, icons::draw_icon_undo, "Undo (Cmd+Z)", colors);
+            Self::disabled_icon_button(ui, icons::draw_icon_redo, "Redo (Cmd+Shift+Z)", colors);
         });
     }
 
@@ -183,11 +172,7 @@ impl ToolbarPanel {
         response.on_hover_text(tooltip);
     }
 
-    fn disabled_tool_button(
-        ui: &mut egui::Ui,
-        tool: Tool,
-        colors: &ThemeColors,
-    ) {
+    fn disabled_tool_button(ui: &mut egui::Ui, tool: Tool, colors: &ThemeColors) {
         let size = egui::vec2(TOOL_BUTTON_SIZE, TOOL_BUTTON_SIZE);
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
         tool.draw_icon(ui.painter(), rect, colors.border);

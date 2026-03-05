@@ -6,6 +6,7 @@
 mod app;
 mod document;
 pub mod export;
+mod palette_lookup;
 mod panels;
 mod theme;
 mod widgets;
