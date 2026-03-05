@@ -31,10 +31,21 @@ pub fn apply_theme(ctx: &egui::Context) {
 
     let control_bg = egui::Color32::from_rgb(10, 11, 13);
     let control_bg_hover = egui::Color32::from_rgb(12, 14, 17);
+    let scroll_thumb_idle = colors.accent.gamma_multiply(0.78);
+    let scroll_thumb_hover = colors.accent.gamma_multiply(0.92);
+    let scroll_thumb_active = colors.accent;
 
     style.spacing.item_spacing = egui::vec2(8.0, 8.0);
     style.spacing.window_margin = egui::Margin::same(12);
     style.spacing.button_padding = egui::vec2(8.0, 4.0);
+    // Shadows-themed scrollbar: solid rail, wider handle, compact margins.
+    let mut scroll = egui::style::ScrollStyle::solid();
+    scroll.bar_width = 8.0;
+    scroll.handle_min_length = 18.0;
+    scroll.bar_inner_margin = 1.0;
+    scroll.bar_outer_margin = 1.0;
+    scroll.foreground_color = true;
+    style.spacing.scroll = scroll;
 
     style.visuals = egui::Visuals::dark();
     style.visuals.window_corner_radius = egui::CornerRadius::same(6);
@@ -44,28 +55,28 @@ pub fn apply_theme(ctx: &egui::Context) {
 
     style.visuals.widgets.inactive.bg_fill = control_bg;
     style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, colors.border);
-    style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, colors.muted);
-    style.visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(4);
+    style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, scroll_thumb_idle);
+    style.visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(1);
 
     style.visuals.widgets.hovered.bg_fill = control_bg_hover;
     style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, colors.accent);
-    style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, colors.text);
-    style.visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(4);
+    style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, scroll_thumb_hover);
+    style.visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(1);
 
     style.visuals.widgets.active.bg_fill = control_bg_hover;
     style.visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, colors.accent);
-    style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, colors.text);
-    style.visuals.widgets.active.corner_radius = egui::CornerRadius::same(4);
+    style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, scroll_thumb_active);
+    style.visuals.widgets.active.corner_radius = egui::CornerRadius::same(1);
 
     style.visuals.widgets.open.bg_fill = control_bg_hover;
     style.visuals.widgets.open.bg_stroke = egui::Stroke::new(1.0, colors.accent);
-    style.visuals.widgets.open.corner_radius = egui::CornerRadius::same(4);
+    style.visuals.widgets.open.corner_radius = egui::CornerRadius::same(1);
 
     style.visuals.widgets.noninteractive.bg_fill = colors.bg_2;
     style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, colors.border);
     style.visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, colors.text);
 
-    style.visuals.extreme_bg_color = control_bg;
+    style.visuals.extreme_bg_color = colors.bg_3;
     style.visuals.text_edit_bg_color = Some(control_bg);
     style.visuals.selection.bg_fill = colors.accent.gamma_multiply(0.4);
     style.visuals.selection.stroke = egui::Stroke::new(1.0, colors.accent);

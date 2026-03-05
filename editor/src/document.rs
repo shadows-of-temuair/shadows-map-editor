@@ -5,6 +5,23 @@ use tracing::warn;
 
 use crate::map_list::MapMetadataHint;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaintLayer {
+    Ground,
+    LeftWall,
+    RightWall,
+}
+
+impl PaintLayer {
+    fn read_from_tile(self, tile: &map::Tile) -> u16 {
+        match self {
+            PaintLayer::Ground => tile.ground,
+            PaintLayer::LeftWall => tile.left_wall,
+            PaintLayer::RightWall => tile.right_wall,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 #[allow(dead_code)]
 enum EditChange {
@@ -47,7 +64,8 @@ impl EditChange {
     }
 }
 
-struct PendingGroundStroke {
+struct PendingStroke {
+    layer: PaintLayer,
     paint_value: u16,
     original_values: std::collections::BTreeMap<usize, u16>,
 }
@@ -91,7 +109,7 @@ pub struct MapDocument {
     pub camera: Camera,
     undo_stack: Vec<Vec<EditChange>>,
     redo_stack: Vec<Vec<EditChange>>,
-    pending_ground_stroke: Option<PendingGroundStroke>,
+    pending_stroke: Option<PendingStroke>,
 }
 
 impl MapDocument {
@@ -105,7 +123,7 @@ impl MapDocument {
             camera: Camera::default(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
-            pending_ground_stroke: None,
+            pending_stroke: None,
         }
     }
 
@@ -141,12 +159,12 @@ impl MapDocument {
             camera: Camera::default(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
-            pending_ground_stroke: None,
+            pending_stroke: None,
         })
     }
 
     pub fn save(&mut self) -> std::io::Result<()> {
-        self.finish_ground_stroke();
+        self.finish_stroke();
         if let Some(ref path) = self.path {
             self.map.save(path)?;
             self.dirty = false;
@@ -155,7 +173,7 @@ impl MapDocument {
     }
 
     pub fn save_as(&mut self, path: PathBuf) -> std::io::Result<()> {
-        self.finish_ground_stroke();
+        self.finish_stroke();
         self.map.save(&path)?;
         self.path = Some(path);
         self.dirty = false;
@@ -163,7 +181,7 @@ impl MapDocument {
     }
 
     pub fn set_dimensions(&mut self, width: u16, height: u16) -> Result<(), String> {
-        self.finish_ground_stroke();
+        self.finish_stroke();
         if width == 0 || height == 0 {
             return Err("Width and height must both be at least 1.".to_string());
         }
@@ -223,7 +241,7 @@ impl MapDocument {
     pub fn clear_history(&mut self) {
         self.undo_stack.clear();
         self.redo_stack.clear();
-        self.pending_ground_stroke = None;
+        self.pending_stroke = None;
         self.dirty = false;
     }
 
@@ -235,18 +253,20 @@ impl MapDocument {
         !self.redo_stack.is_empty()
     }
 
-    pub fn begin_ground_stroke(&mut self, paint_value: u16) {
-        match self.pending_ground_stroke.as_ref() {
-            Some(stroke) if stroke.paint_value == paint_value => {}
+    pub fn begin_layer_stroke(&mut self, layer: PaintLayer, paint_value: u16) {
+        match self.pending_stroke.as_ref() {
+            Some(stroke) if stroke.paint_value == paint_value && stroke.layer == layer => {}
             Some(_) => {
-                self.finish_ground_stroke();
-                self.pending_ground_stroke = Some(PendingGroundStroke {
+                self.finish_stroke();
+                self.pending_stroke = Some(PendingStroke {
+                    layer,
                     paint_value,
                     original_values: std::collections::BTreeMap::new(),
                 });
             }
             None => {
-                self.pending_ground_stroke = Some(PendingGroundStroke {
+                self.pending_stroke = Some(PendingStroke {
+                    layer,
                     paint_value,
                     original_values: std::collections::BTreeMap::new(),
                 });
@@ -254,30 +274,41 @@ impl MapDocument {
         }
     }
 
-    pub fn paint_ground_stroke_tile(&mut self, col: u16, row: u16, paint_value: u16) -> bool {
+    pub fn paint_layer_stroke_tile(
+        &mut self,
+        layer: PaintLayer,
+        col: u16,
+        row: u16,
+        paint_value: u16,
+    ) -> bool {
         if col >= self.map.width || row >= self.map.height {
             return false;
         }
 
-        self.begin_ground_stroke(paint_value);
+        self.begin_layer_stroke(layer, paint_value);
         let idx = row as usize * self.map.width as usize + col as usize;
         let tile = &mut self.map.tiles[idx];
+        let current = layer.read_from_tile(tile);
 
-        if tile.ground == paint_value {
+        if current == paint_value {
             return false;
         }
 
-        if let Some(stroke) = self.pending_ground_stroke.as_mut() {
-            stroke.original_values.entry(idx).or_insert(tile.ground);
+        if let Some(stroke) = self.pending_stroke.as_mut() {
+            stroke.original_values.entry(idx).or_insert(current);
         }
 
-        tile.ground = paint_value;
+        match layer {
+            PaintLayer::Ground => tile.ground = paint_value,
+            PaintLayer::LeftWall => tile.left_wall = paint_value,
+            PaintLayer::RightWall => tile.right_wall = paint_value,
+        }
         self.dirty = true;
         true
     }
 
-    pub fn finish_ground_stroke(&mut self) -> bool {
-        let Some(stroke) = self.pending_ground_stroke.take() else {
+    pub fn finish_stroke(&mut self) -> bool {
+        let Some(stroke) = self.pending_stroke.take() else {
             return false;
         };
         if stroke.original_values.is_empty() {
@@ -287,10 +318,22 @@ impl MapDocument {
         let changes = stroke
             .original_values
             .into_iter()
-            .map(|(idx, old)| EditChange::Ground {
-                idx,
-                old,
-                new: stroke.paint_value,
+            .map(|(idx, old)| match stroke.layer {
+                PaintLayer::Ground => EditChange::Ground {
+                    idx,
+                    old,
+                    new: stroke.paint_value,
+                },
+                PaintLayer::LeftWall => EditChange::LeftWall {
+                    idx,
+                    old,
+                    new: stroke.paint_value,
+                },
+                PaintLayer::RightWall => EditChange::RightWall {
+                    idx,
+                    old,
+                    new: stroke.paint_value,
+                },
             })
             .collect::<Vec<_>>();
 
@@ -301,7 +344,7 @@ impl MapDocument {
     }
 
     pub fn undo(&mut self) -> bool {
-        self.finish_ground_stroke();
+        self.finish_stroke();
 
         let Some(batch) = self.undo_stack.pop() else {
             return false;
@@ -316,7 +359,7 @@ impl MapDocument {
     }
 
     pub fn redo(&mut self) -> bool {
-        self.finish_ground_stroke();
+        self.finish_stroke();
 
         let Some(batch) = self.redo_stack.pop() else {
             return false;
@@ -371,5 +414,24 @@ mod tests {
         assert_eq!(doc.map.tiles[1].ground, 2);
         assert_eq!(doc.map.tiles[2].ground, 4);
         assert_eq!(doc.map.tiles[3].ground, 5);
+    }
+
+    #[test]
+    fn wall_stroke_undo_redo_roundtrip() {
+        let mut doc = MapDocument::new(2, 2);
+
+        assert!(doc.paint_layer_stroke_tile(PaintLayer::LeftWall, 0, 0, 12));
+        assert!(doc.paint_layer_stroke_tile(PaintLayer::LeftWall, 1, 0, 12));
+        assert!(doc.finish_stroke());
+        assert_eq!(doc.map.tiles[0].left_wall, 12);
+        assert_eq!(doc.map.tiles[1].left_wall, 12);
+
+        assert!(doc.undo());
+        assert_eq!(doc.map.tiles[0].left_wall, 0);
+        assert_eq!(doc.map.tiles[1].left_wall, 0);
+
+        assert!(doc.redo());
+        assert_eq!(doc.map.tiles[0].left_wall, 12);
+        assert_eq!(doc.map.tiles[1].left_wall, 12);
     }
 }

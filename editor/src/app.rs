@@ -3,7 +3,7 @@ use std::{collections::VecDeque, path::PathBuf};
 use eframe::egui;
 use tracing::{info, warn};
 
-use crate::document::{LayerVisibility, MapDocument};
+use crate::document::{LayerVisibility, MapDocument, PaintLayer};
 use crate::map_list::{MapList, MapMetadataHint};
 use crate::palette_lookup::LoadedPaletteLookup;
 use crate::panels::{
@@ -19,6 +19,7 @@ pub struct EditorApp {
     active_tab: usize,
     active_tool: Tool,
     active_shape_kind: ShapeKind,
+    active_paint_layer: PaintLayer,
     tab_bar: TabBarPanel,
     status_bar: StatusBarPanel,
     layer_visibility: LayerVisibility,
@@ -34,8 +35,7 @@ pub struct EditorApp {
     hover_tile: (u16, u16),
     selected_tile: Option<(u16, u16)>,
     selected_ground_tile: u16,
-    selected_left_wall_tile: u16,
-    selected_right_wall_tile: u16,
+    selected_wall_tile: u16,
     last_pencil_click_tile: Option<(u16, u16)>,
     line_tool_start_tile: Option<(u16, u16)>,
     shape_tool_start_tile: Option<(u16, u16)>,
@@ -62,6 +62,7 @@ impl EditorApp {
             active_tab: 0,
             active_tool: Tool::Pencil,
             active_shape_kind: ShapeKind::Rect,
+            active_paint_layer: PaintLayer::Ground,
             tab_bar: TabBarPanel::default(),
             status_bar: StatusBarPanel::default(),
             layer_visibility: LayerVisibility::default(),
@@ -79,8 +80,7 @@ impl EditorApp {
             hover_tile: (0, 0),
             selected_tile: None,
             selected_ground_tile,
-            selected_left_wall_tile: 0,
-            selected_right_wall_tile: 0,
+            selected_wall_tile: 0,
             last_pencil_click_tile: None,
             line_tool_start_tile: None,
             shape_tool_start_tile: None,
@@ -108,6 +108,30 @@ impl EditorApp {
             self.active_tool = tool;
             self.line_tool_start_tile = None;
             self.shape_tool_start_tile = None;
+        }
+    }
+
+    fn set_active_paint_layer(&mut self, layer: PaintLayer) {
+        if self.active_paint_layer == layer {
+            return;
+        }
+        self.documents[self.active_tab].finish_stroke();
+        self.active_paint_layer = layer;
+        self.clear_edit_anchors();
+    }
+
+    fn selected_tile_for_layer(&self, layer: PaintLayer) -> u16 {
+        match layer {
+            PaintLayer::Ground => self.selected_ground_tile,
+            PaintLayer::LeftWall | PaintLayer::RightWall => self.selected_wall_tile,
+        }
+    }
+
+    fn tile_value_for_layer(tile: &map::Tile, layer: PaintLayer) -> u16 {
+        match layer {
+            PaintLayer::Ground => tile.ground,
+            PaintLayer::LeftWall => tile.left_wall,
+            PaintLayer::RightWall => tile.right_wall,
         }
     }
 
@@ -420,9 +444,7 @@ impl EditorApp {
 
         // 2x2 checker: opaque-white and transparent texels.
         // Alpha 84 is ~33% opacity.
-        let pixels: [u8; 16] = [
-            255, 255, 255, 84, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 84,
-        ];
+        let pixels: [u8; 16] = [255, 255, 255, 84, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 84];
         let texture = ctx.load_texture(
             "tab_overlay_checker",
             egui::ColorImage::from_rgba_unmultiplied([2, 2], &pixels),
@@ -432,7 +454,7 @@ impl EditorApp {
     }
 
     fn new_document(&mut self) {
-        self.documents[self.active_tab].finish_ground_stroke();
+        self.documents[self.active_tab].finish_stroke();
         let map = &self.documents[self.active_tab].map;
         self.new_map_size_dialog.open(map.width, map.height);
     }
@@ -449,7 +471,7 @@ impl EditorApp {
     }
 
     fn open_document(&mut self) {
-        self.documents[self.active_tab].finish_ground_stroke();
+        self.documents[self.active_tab].finish_stroke();
         let file = rfd::FileDialog::new()
             .add_filter("Map", &["map"])
             .pick_file();
@@ -480,7 +502,7 @@ impl EditorApp {
     }
 
     fn save_document(&mut self) {
-        self.documents[self.active_tab].finish_ground_stroke();
+        self.documents[self.active_tab].finish_stroke();
         let Some(path) = self.prompt_save_path_for_active_document() else {
             return;
         };
@@ -506,7 +528,7 @@ impl EditorApp {
     }
 
     fn save_document_as(&mut self) {
-        self.documents[self.active_tab].finish_ground_stroke();
+        self.documents[self.active_tab].finish_stroke();
         let Some(path) = self.prompt_save_path_for_active_document() else {
             return;
         };
@@ -581,7 +603,7 @@ impl EditorApp {
     }
 
     fn close_tab(&mut self, index: usize) {
-        self.documents[self.active_tab].finish_ground_stroke();
+        self.documents[self.active_tab].finish_stroke();
         if self.documents.len() <= 1 {
             // Don't close the last tab — replace with a fresh document
             self.documents[0] = MapDocument::new(50, 50);
@@ -613,13 +635,14 @@ impl EditorApp {
         }
     }
 
-    fn paint_ground_line(
+    fn paint_layer_line(
         doc: &mut MapDocument,
-        selected_ground_tile: u16,
+        layer: PaintLayer,
+        paint_value: u16,
         start: (u16, u16),
         end: (u16, u16),
     ) {
-        doc.begin_ground_stroke(selected_ground_tile);
+        doc.begin_layer_stroke(layer, paint_value);
         let (mut x0, mut y0) = (start.0 as i32, start.1 as i32);
         let (x1, y1) = (end.0 as i32, end.1 as i32);
 
@@ -631,7 +654,7 @@ impl EditorApp {
 
         loop {
             if x0 >= 0 && y0 >= 0 {
-                doc.paint_ground_stroke_tile(x0 as u16, y0 as u16, selected_ground_tile);
+                doc.paint_layer_stroke_tile(layer, x0 as u16, y0 as u16, paint_value);
             }
 
             if x0 == x1 && y0 == y1 {
@@ -648,35 +671,41 @@ impl EditorApp {
                 y0 += sy;
             }
         }
-        doc.finish_ground_stroke();
+        doc.finish_stroke();
     }
 
-    fn paint_ground_shape(
+    fn paint_layer_shape(
         doc: &mut MapDocument,
-        selected_ground_tile: u16,
+        layer: PaintLayer,
+        paint_value: u16,
         shape_kind: ShapeKind,
         start: (u16, u16),
         end: (u16, u16),
     ) {
-        if selected_ground_tile == 0 {
+        if paint_value == 0 {
             return;
         }
 
         let points = shape::outline_points(shape_kind, start, end);
-        doc.begin_ground_stroke(selected_ground_tile);
+        doc.begin_layer_stroke(layer, paint_value);
         for (x, y) in points {
             if x < 0 || y < 0 {
                 continue;
             }
             let (x, y) = (x as u16, y as u16);
             if x < doc.map.width && y < doc.map.height {
-                doc.paint_ground_stroke_tile(x, y, selected_ground_tile);
+                doc.paint_layer_stroke_tile(layer, x, y, paint_value);
             }
         }
-        doc.finish_ground_stroke();
+        doc.finish_stroke();
     }
 
-    fn paint_ground_fill(doc: &mut MapDocument, paint_value: u16, start: (u16, u16)) {
+    fn paint_layer_fill(
+        doc: &mut MapDocument,
+        layer: PaintLayer,
+        paint_value: u16,
+        start: (u16, u16),
+    ) {
         if paint_value == 0 || start.0 >= doc.map.width || start.1 >= doc.map.height {
             return;
         }
@@ -684,7 +713,7 @@ impl EditorApp {
         let width = doc.map.width as usize;
         let height = doc.map.height as usize;
         let start_idx = start.1 as usize * width + start.0 as usize;
-        let target_value = doc.map.tiles[start_idx].ground;
+        let target_value = Self::tile_value_for_layer(&doc.map.tiles[start_idx], layer);
 
         if target_value == paint_value {
             return;
@@ -695,15 +724,15 @@ impl EditorApp {
         visited[start_idx] = true;
         queue.push_back(start);
 
-        doc.begin_ground_stroke(paint_value);
+        doc.begin_layer_stroke(layer, paint_value);
 
         while let Some((col, row)) = queue.pop_front() {
             let idx = row as usize * width + col as usize;
-            if doc.map.tiles[idx].ground != target_value {
+            if Self::tile_value_for_layer(&doc.map.tiles[idx], layer) != target_value {
                 continue;
             }
 
-            doc.paint_ground_stroke_tile(col, row, paint_value);
+            doc.paint_layer_stroke_tile(layer, col, row, paint_value);
 
             let neighbors = [
                 (col.checked_sub(1), Some(row)),
@@ -726,13 +755,13 @@ impl EditorApp {
                 }
                 visited[nidx] = true;
 
-                if doc.map.tiles[nidx].ground == target_value {
+                if Self::tile_value_for_layer(&doc.map.tiles[nidx], layer) == target_value {
                     queue.push_back((ncol, nrow));
                 }
             }
         }
 
-        doc.finish_ground_stroke();
+        doc.finish_stroke();
     }
 
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
@@ -746,6 +775,7 @@ impl EditorApp {
             redo,
             export,
             tool,
+            toggle_wall_target_side,
             toggle_layer,
             toggle_tab_overlay,
             keyboard_zoom,
@@ -776,6 +806,9 @@ impl EditorApp {
             } else {
                 None
             };
+
+            // Wall target toggle (Q): left <-> right when in wall mode.
+            let toggle_wall_target_side = !cmd && !shift && i.key_pressed(egui::Key::Q);
 
             // Layer toggle shortcuts (Cmd+1/2/3/4)
             let toggle_layer = if cmd && !shift {
@@ -825,6 +858,7 @@ impl EditorApp {
                 redo,
                 cmd && i.key_pressed(egui::Key::E),
                 tool,
+                toggle_wall_target_side,
                 toggle_layer,
                 toggle_tab_overlay,
                 keyboard_zoom,
@@ -834,6 +868,19 @@ impl EditorApp {
 
         if let Some(t) = tool {
             self.set_active_tool(t);
+        }
+        if toggle_wall_target_side {
+            match self.active_paint_layer {
+                PaintLayer::LeftWall => {
+                    self.set_active_paint_layer(PaintLayer::RightWall);
+                    self.status_message = "Wall target: Right".to_string();
+                }
+                PaintLayer::RightWall => {
+                    self.set_active_paint_layer(PaintLayer::LeftWall);
+                    self.status_message = "Wall target: Left".to_string();
+                }
+                PaintLayer::Ground => {}
+            }
         }
         if let Some(layer) = toggle_layer {
             match layer {
@@ -967,7 +1014,7 @@ impl eframe::App for EditorApp {
         match tab_action {
             TabBarAction::CloseTab(i) => self.close_tab(i),
             TabBarAction::SwitchTab(i) => {
-                self.documents[self.active_tab].finish_ground_stroke();
+                self.documents[self.active_tab].finish_stroke();
                 self.active_tab = i;
                 self.clear_edit_anchors();
                 self.tab_bar.ensure_tab_visible(&self.documents, i);
@@ -1121,17 +1168,26 @@ impl eframe::App for EditorApp {
             }
         }
 
-        // Inspector: tileset + tab map
-        {
+        // Inspector: tile palette + tab map
+        let requested_layer = {
             let doc = &self.documents[self.active_tab];
+            let mut requested = self.active_paint_layer;
             InspectorPanel::show(
                 ctx,
                 &doc.map,
                 self.sotp_data.as_deref(),
                 self.tile_atlas.as_ref(),
                 self.atlas_texture.as_ref(),
+                self.wall_atlas.as_ref(),
+                self.wall_texture.as_ref(),
+                &mut requested,
                 &mut self.selected_ground_tile,
+                &mut self.selected_wall_tile,
             );
+            requested
+        };
+        if requested_layer != self.active_paint_layer {
+            self.set_active_paint_layer(requested_layer);
         }
 
         // Viewport needs mutable access to camera for panning
@@ -1139,26 +1195,30 @@ impl eframe::App for EditorApp {
             self.show_collision_overlay = false;
         }
 
-        let doc = &mut self.documents[self.active_tab];
-        let vp_result = ViewportPanel::show(
-            ctx,
-            &doc.map,
-            &mut doc.camera,
-            effective_tool,
-            self.active_shape_kind,
-            self.selected_ground_tile,
-            self.line_tool_start_tile,
-            self.shape_tool_start_tile,
-            self.tile_atlas.as_ref(),
-            self.atlas_texture.as_ref(),
-            self.wall_atlas.as_ref(),
-            self.wall_texture.as_ref(),
-            self.tab_overlay_texture.as_ref(),
-            &mut self.layer_visibility,
-            &mut self.show_grid,
-            &mut self.show_collision_overlay,
-            self.sotp_data.as_deref(),
-        );
+        let vp_result = {
+            let doc = &mut self.documents[self.active_tab];
+            ViewportPanel::show(
+                ctx,
+                &doc.map,
+                &mut doc.camera,
+                effective_tool,
+                self.active_shape_kind,
+                self.active_paint_layer,
+                self.selected_ground_tile,
+                self.selected_wall_tile,
+                self.line_tool_start_tile,
+                self.shape_tool_start_tile,
+                self.tile_atlas.as_ref(),
+                self.atlas_texture.as_ref(),
+                self.wall_atlas.as_ref(),
+                self.wall_texture.as_ref(),
+                self.tab_overlay_texture.as_ref(),
+                &mut self.layer_visibility,
+                &mut self.show_grid,
+                &mut self.show_collision_overlay,
+                self.sotp_data.as_deref(),
+            )
+        };
         if let Some(tile) = vp_result.hover_tile {
             self.hover_tile = tile;
         }
@@ -1169,20 +1229,26 @@ impl eframe::App for EditorApp {
             match pick {
                 EyedropperPick::Ground(tile_id) => {
                     self.selected_ground_tile = tile_id;
+                    self.set_active_paint_layer(PaintLayer::Ground);
                     self.status_message = format!("Picked ground tile #{}.", tile_id);
                 }
                 EyedropperPick::LeftWall(tile_id) => {
-                    self.selected_left_wall_tile = tile_id;
+                    self.selected_wall_tile = tile_id;
+                    self.set_active_paint_layer(PaintLayer::LeftWall);
                     self.status_message =
-                        format!("Picked left wall #{}.", self.selected_left_wall_tile);
+                        format!("Picked wall #{} (left).", self.selected_wall_tile);
                 }
                 EyedropperPick::RightWall(tile_id) => {
-                    self.selected_right_wall_tile = tile_id;
+                    self.selected_wall_tile = tile_id;
+                    self.set_active_paint_layer(PaintLayer::RightWall);
                     self.status_message =
-                        format!("Picked right wall #{}.", self.selected_right_wall_tile);
+                        format!("Picked wall #{} (right).", self.selected_wall_tile);
                 }
             }
         }
+
+        let paint_layer = self.active_paint_layer;
+        let selected_paint_tile = self.selected_tile_for_layer(paint_layer);
 
         let cancel_shape_or_line = ctx.input(|i| {
             i.key_pressed(egui::Key::Escape)
@@ -1193,11 +1259,12 @@ impl eframe::App for EditorApp {
             self.shape_tool_start_tile = None;
         }
 
+        let doc = &mut self.documents[self.active_tab];
         if self.active_tool == Tool::Pencil {
             if let Some(end) = vp_result.pencil_shift_clicked_tile {
-                doc.finish_ground_stroke();
+                doc.finish_stroke();
                 if let Some(start) = self.last_pencil_click_tile {
-                    Self::paint_ground_line(doc, self.selected_ground_tile, start, end);
+                    Self::paint_layer_line(doc, paint_layer, selected_paint_tile, start, end);
                     self.last_pencil_click_tile = Some(end);
                 }
             } else if let Some(point) = vp_result.pencil_clicked_tile {
@@ -1206,8 +1273,8 @@ impl eframe::App for EditorApp {
         } else if self.active_tool == Tool::Line {
             if let Some(end) = vp_result.line_clicked_tile {
                 if let Some(start) = self.line_tool_start_tile {
-                    doc.finish_ground_stroke();
-                    Self::paint_ground_line(doc, self.selected_ground_tile, start, end);
+                    doc.finish_stroke();
+                    Self::paint_layer_line(doc, paint_layer, selected_paint_tile, start, end);
                     self.line_tool_start_tile = Some(end);
                 } else {
                     self.line_tool_start_tile = Some(end);
@@ -1216,10 +1283,11 @@ impl eframe::App for EditorApp {
         } else if self.active_tool == Tool::Shape {
             if let Some(end) = vp_result.shape_clicked_tile {
                 if let Some(start) = self.shape_tool_start_tile {
-                    doc.finish_ground_stroke();
-                    Self::paint_ground_shape(
+                    doc.finish_stroke();
+                    Self::paint_layer_shape(
                         doc,
-                        self.selected_ground_tile,
+                        paint_layer,
+                        selected_paint_tile,
                         self.active_shape_kind,
                         start,
                         end,
@@ -1231,15 +1299,15 @@ impl eframe::App for EditorApp {
             }
         } else if self.active_tool == Tool::Fill {
             if let Some((col, row, paint_value)) = vp_result.fill_clicked_tile {
-                Self::paint_ground_fill(doc, paint_value, (col, row));
+                Self::paint_layer_fill(doc, paint_layer, paint_value, (col, row));
             }
         }
         if let Some((col, row, paint_value)) = vp_result.painted_tile {
-            doc.paint_ground_stroke_tile(col, row, paint_value);
+            doc.paint_layer_stroke_tile(paint_layer, col, row, paint_value);
         }
         let primary_down = ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
         if !primary_down {
-            doc.finish_ground_stroke();
+            doc.finish_stroke();
         }
     }
 }

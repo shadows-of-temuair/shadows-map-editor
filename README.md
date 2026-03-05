@@ -104,6 +104,7 @@ If `maps.ron` exists in the project root, the editor uses it as map metadata:
 - **G** — Switch to Fill tool
 - **I** — Switch to Eyedropper tool
 - **R** — Switch to Shape tool
+- **Q** — Toggle wall paint target side (Left/Right) while in Wall mode
 - **Left click (Pencil)** — Paint the hovered tile
 - **Left drag (Pencil)** — Paint continuously while holding the mouse button
 - **Shift+Left click (Pencil)** — Draw a line from the last pencil click to the clicked tile (does nothing if there is no previous pencil click)
@@ -113,8 +114,9 @@ If `maps.ron` exists in the project root, the editor uses it as map metadata:
 - **Esc** or **Right click (Line/Shape)** — Cancel the pending start point
 - **Left click/drag (Eraser)** — Clear ground tiles (writes tile ID `0`)
 - **Left click (Fill)** — Flood-fill contiguous ground region with the selected ground tile
-- **Left click (Eyedropper)** — Pick the hovered ground tile
-- **Shift+Left click (Eyedropper)** — Pick hovered wall tile (left/right wall chosen by cursor side)
+- **Left click (Eyedropper)** — Pick the hovered value for the active palette mode (ground in Ground mode, left wall in Wall mode)
+- **Shift+Left click (Eyedropper)** — In Wall mode, pick the hovered right wall instead of left wall
+- **Eyedropper hover highlight** — Shows exactly which ground/wall target will be sampled before clicking
 - **Alt/Option (hold)** — Temporarily use Eyedropper while held (supports the same Shift behavior)
 
 ### Export
