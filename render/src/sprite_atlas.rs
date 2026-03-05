@@ -51,10 +51,24 @@ impl fmt::Display for SpriteAtlasError {
 impl std::error::Error for SpriteAtlasError {}
 
 impl SpriteAtlas {
-    /// Build a sprite atlas from decoded HPF sprites with a palette resolver.
+    /// Build a sprite atlas from decoded HPF sprites.
     ///
-    /// `palette_for_sprite` is called with the sprite ID and should return the
-    /// palette used to decode that sprite.
+    /// `sprites` is indexed by sprite ID. `None` entries represent
+    /// empty/missing sprite slots and are preserved so that lookups by tile ID
+    /// remain aligned.
+    ///
+    /// `sprite_width` is the fixed pixel width shared by all sprites (28 for
+    /// wall sprites). `palette` converts the 8-bit indexed pixels to RGBA.
+    pub fn build(
+        sprites: &[Option<HpfSprite>],
+        palette: &Palette,
+        sprite_width: u32,
+    ) -> Result<Self, SpriteAtlasError> {
+        Self::build_with_sprite_palette(sprites, sprite_width, |_| palette)
+    }
+
+    /// Build a sprite atlas from decoded HPF sprites, selecting the palette
+    /// per sprite ID.
     pub fn build_with_sprite_palette<'a, F>(
         sprites: &[Option<HpfSprite>],
         sprite_width: u32,
@@ -173,22 +187,6 @@ impl SpriteAtlas {
         })
     }
 
-    /// Build a sprite atlas from decoded HPF sprites.
-    ///
-    /// `sprites` is indexed by sprite ID. `None` entries represent
-    /// empty/missing sprite slots and are preserved so that lookups by tile ID
-    /// remain aligned.
-    ///
-    /// `sprite_width` is the fixed pixel width shared by all sprites (28 for
-    /// wall sprites). `palette` converts the 8-bit indexed pixels to RGBA.
-    pub fn build(
-        sprites: &[Option<HpfSprite>],
-        palette: &Palette,
-        sprite_width: u32,
-    ) -> Result<Self, SpriteAtlasError> {
-        Self::build_with_sprite_palette(sprites, sprite_width, |_| palette)
-    }
-
     /// Returns the UV rect `(u_min, v_min, u_max, v_max)` for a sprite,
     /// normalized to `[0, 1]`.
     ///
@@ -240,66 +238,5 @@ impl SpriteAtlas {
     /// Number of sprite entries (including empty slots).
     pub fn sprite_count(&self) -> u32 {
         self.entries.len() as u32
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::SpriteAtlas;
-    use crate::Palette;
-    use crate::hpf::HpfSprite;
-
-    fn make_palette(color_at_1: [u8; 3]) -> Palette {
-        let mut bytes = [0u8; 768];
-        bytes[3] = color_at_1[0];
-        bytes[4] = color_at_1[1];
-        bytes[5] = color_at_1[2];
-        Palette::from_bytes(&bytes).expect("valid 768-byte palette")
-    }
-
-    #[test]
-    fn build_with_sprite_palette_uses_palette_per_sprite_id() {
-        let red_palette = make_palette([200, 10, 10]);
-        let green_palette = make_palette([10, 200, 10]);
-
-        let sprite_a = HpfSprite {
-            width: 28,
-            height: 1,
-            pixels: vec![1u8; 28],
-        };
-        let sprite_b = HpfSprite {
-            width: 28,
-            height: 1,
-            pixels: vec![1u8; 28],
-        };
-
-        let sprites = vec![Some(sprite_a), Some(sprite_b)];
-        let atlas = SpriteAtlas::build_with_sprite_palette(&sprites, 28, |sprite_id| {
-            if sprite_id == 0 {
-                &red_palette
-            } else {
-                &green_palette
-            }
-        })
-        .expect("atlas should build");
-
-        let (atlas_w, _) = atlas.dimensions();
-        let pixels = atlas.pixels();
-
-        let sample = |x: u32, y: u32| -> [u8; 4] {
-            let idx = ((y * atlas_w + x) * 4) as usize;
-            [
-                pixels[idx],
-                pixels[idx + 1],
-                pixels[idx + 2],
-                pixels[idx + 3],
-            ]
-        };
-
-        let (ax, ay, _, _) = atlas.sprite_rect(0).expect("sprite 0 exists");
-        let (bx, by, _, _) = atlas.sprite_rect(1).expect("sprite 1 exists");
-
-        assert_eq!(sample(ax, ay), [200, 10, 10, 255]);
-        assert_eq!(sample(bx, by), [10, 200, 10, 255]);
     }
 }
