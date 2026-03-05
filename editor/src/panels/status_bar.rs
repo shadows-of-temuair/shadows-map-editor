@@ -20,6 +20,10 @@ pub struct StatusBarPanel {
 }
 
 impl StatusBarPanel {
+    pub fn is_size_dialog_open(&self) -> bool {
+        self.size_dialog.is_open()
+    }
+
     pub fn show(
         &mut self,
         ctx: &egui::Context,

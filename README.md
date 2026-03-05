@@ -92,6 +92,8 @@ If `maps.ron` exists in the project root, the editor uses it as map metadata:
 - **Cmd+2** — Toggle left walls
 - **Cmd+3** — Toggle right walls
 - **Cmd+4** — Toggle grid overlay
+- **Tab** — Toggle tab collision overlay on the main viewport (requires `SOTP.DAT`)
+- Floating viewport controls include `Grid` and `Tab` toggles in the top-right.
 
 ### Editing
 

@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - New map creation and custom map sizing dialogs.
 - `maps.ron` metadata support for friendly map names and map-size hints when counts match.
 - Status bar improvements, including always-visible active file name and clearer map/zoom layout.
+- Tab collision overlay on the main map view, with a `Tab` toggle and button next to `Grid`.
 - Asset loading from game `.dat` archives for tiles, palettes, and wall sprites.
 - Wall/object rendering support and better scene layering for map visuals.
 - Custom app icon/window frame polish and cross-platform build setup.

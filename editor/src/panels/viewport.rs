@@ -53,8 +53,11 @@ impl ViewportPanel {
         atlas_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
+        tab_overlay_texture: Option<&egui::TextureHandle>,
         layers: &mut LayerVisibility,
         show_grid: &mut bool,
+        show_collision_overlay: &mut bool,
+        sotp: Option<&[u8]>,
     ) -> ViewportResult {
         let colors = theme_colors();
         let mut result = ViewportResult::default();
@@ -142,6 +145,24 @@ impl ViewportPanel {
                 // Draw grid overlay
                 if *show_grid {
                     Self::draw_grid(&painter, map, origin, half_w, half_h);
+                }
+
+                // Draw collision overlay from SOTP passability data.
+                if *show_collision_overlay {
+                    if let Some(sotp) = sotp {
+                        Self::draw_collision_overlay(
+                            &painter,
+                            map,
+                            sotp,
+                            tab_overlay_texture,
+                            origin,
+                            half_w,
+                            half_h,
+                            rect,
+                        );
+                    } else {
+                        *show_collision_overlay = false;
+                    }
                 }
 
                 let overlay_rect = Self::overlay_rect(rect);
@@ -319,8 +340,16 @@ impl ViewportPanel {
                     }
                 }
 
-                // Floating overlay: Grid | G L R
-                Self::draw_overlay(ui, rect, show_grid, layers, &colors);
+                // Floating overlay: Grid | Tab | G L R
+                Self::draw_overlay(
+                    ui,
+                    rect,
+                    show_grid,
+                    show_collision_overlay,
+                    sotp.is_some(),
+                    layers,
+                    &colors,
+                );
             });
 
         result
@@ -468,11 +497,14 @@ impl ViewportPanel {
         ui: &mut egui::Ui,
         viewport_rect: egui::Rect,
         show_grid: &mut bool,
+        show_collision_overlay: &mut bool,
+        collision_available: bool,
         layers: &mut LayerVisibility,
         colors: &ThemeColors,
     ) {
         let btn_h = 24.0;
         let grid_w = 42.0;
+        let tab_w = 42.0;
         let layer_w = 26.0;
         let sep_w = 1.0;
         let pad = 6.0;
@@ -486,6 +518,12 @@ impl ViewportPanel {
         // Compute all rects first
         let grid_rect = egui::Rect::from_min_size(egui::pos2(x, btn_y), egui::vec2(grid_w, btn_h));
         x += grid_w + gap;
+
+        let tab_rect = egui::Rect::from_min_size(
+            egui::pos2(x, btn_y),
+            egui::vec2(tab_w, btn_h),
+        );
+        x += tab_w + gap;
 
         let sep_rect =
             egui::Rect::from_min_size(egui::pos2(x, btn_y + 2.0), egui::vec2(sep_w, btn_h - 4.0));
@@ -512,12 +550,26 @@ impl ViewportPanel {
         ui.painter().rect_filled(sep_rect, 0.0, colors.border);
 
         // Then do interactions + paint buttons on top
-        Self::overlay_toggle(ui, "Grid", grid_rect, show_grid, colors, "Grid (Cmd+4)");
+        Self::overlay_toggle(ui, "Grid", grid_rect, show_grid, true, colors, "Grid (Cmd+4)");
+        Self::overlay_toggle(
+            ui,
+            "Tab",
+            tab_rect,
+            show_collision_overlay,
+            collision_available,
+            colors,
+            if collision_available {
+                "Tab collision overlay (Tab)"
+            } else {
+                "Tab collision overlay (unavailable: SOTP.DAT missing)"
+            },
+        );
         Self::overlay_toggle(
             ui,
             "G",
             ground_rect,
             &mut layers.ground,
+            true,
             colors,
             "Ground (Cmd+1)",
         );
@@ -526,6 +578,7 @@ impl ViewportPanel {
             "L",
             left_rect,
             &mut layers.left_wall,
+            true,
             colors,
             "Left Wall (Cmd+2)",
         );
@@ -534,6 +587,7 @@ impl ViewportPanel {
             "R",
             right_rect,
             &mut layers.right_wall,
+            true,
             colors,
             "Right Wall (Cmd+3)",
         );
@@ -544,14 +598,22 @@ impl ViewportPanel {
         label: &str,
         rect: egui::Rect,
         enabled: &mut bool,
+        interactive: bool,
         colors: &ThemeColors,
         tooltip: &str,
     ) {
         let id = ui.id().with(("overlay_toggle", label));
-        let response = ui.interact(rect, id, egui::Sense::click());
+        let sense = if interactive {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        };
+        let response = ui.interact(rect, id, sense);
 
         // Use opaque backgrounds so the semi-transparent panel doesn't bleed through
-        let bg = if *enabled {
+        let bg = if !interactive {
+            egui::Color32::from_rgb(16, 18, 22)
+        } else if *enabled {
             colors.accent.gamma_multiply(0.2)
         } else if response.hovered() {
             colors.panel_2
@@ -559,7 +621,9 @@ impl ViewportPanel {
             egui::Color32::from_rgb(18, 20, 24)
         };
 
-        let border = if *enabled {
+        let border = if !interactive {
+            egui::Stroke::new(1.0, colors.border.gamma_multiply(0.35))
+        } else if *enabled {
             egui::Stroke::new(1.0, colors.accent)
         } else if response.hovered() {
             egui::Stroke::new(1.0, colors.border)
@@ -570,7 +634,9 @@ impl ViewportPanel {
         ui.painter()
             .rect(rect, 4.0, bg, border, egui::StrokeKind::Inside);
 
-        let text_color = if *enabled {
+        let text_color = if !interactive {
+            colors.border.gamma_multiply(0.8)
+        } else if *enabled {
             colors.accent
         } else {
             colors.muted
@@ -584,7 +650,7 @@ impl ViewportPanel {
             text_color,
         );
 
-        if response.clicked() {
+        if interactive && response.clicked() {
             *enabled = !*enabled;
         }
 
@@ -594,11 +660,21 @@ impl ViewportPanel {
     fn overlay_rect(viewport_rect: egui::Rect) -> egui::Rect {
         let btn_h = 24.0;
         let grid_w = 42.0;
+        let tab_w = 42.0;
         let layer_w = 26.0;
         let sep_w = 1.0;
         let pad = 6.0;
         let gap = 4.0;
-        let total_w = pad + grid_w + gap + sep_w + gap + layer_w * 3.0 + gap * 2.0 + pad;
+        let total_w = pad
+            + grid_w
+            + gap
+            + tab_w
+            + gap
+            + sep_w
+            + gap
+            + layer_w * 3.0
+            + gap * 2.0
+            + pad;
         let total_h = pad * 2.0 + btn_h;
 
         egui::Rect::from_min_size(
@@ -696,6 +772,170 @@ impl ViewportPanel {
                 grid_stroke,
             );
         }
+    }
+
+    fn draw_collision_overlay(
+        painter: &egui::Painter,
+        map: &map::Map,
+        sotp: &[u8],
+        checker_texture: Option<&egui::TextureHandle>,
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+        viewport: egui::Rect,
+    ) {
+        let w = map.width as usize;
+        let h = map.height as usize;
+        if w == 0 || h == 0 {
+            return;
+        }
+
+        let solid = Self::build_solid_grid(map, sotp);
+        let checker_repeat = 2.0;
+        let mut dither_mesh = checker_texture.map(|texture| egui::Mesh::with_texture(texture.id()));
+        let edge_stroke = egui::Stroke::new(
+            2.0,
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 230),
+        );
+
+        let is_solid = |col: i32, row: i32| -> bool {
+            if col < 0 || col >= w as i32 || row < 0 || row >= h as i32 {
+                return false;
+            }
+            solid[row as usize * w + col as usize]
+        };
+
+        for row in 0..h {
+            for col in 0..w {
+                if !solid[row * w + col] {
+                    continue;
+                }
+
+                let cx = origin.x + (col as f32 - row as f32) * half_w;
+                let cy = origin.y + (col as f32 + row as f32) * half_h;
+
+                let tile_rect = egui::Rect::from_min_max(
+                    egui::pos2(cx - half_w, cy),
+                    egui::pos2(cx + half_w, cy + 2.0 * half_h),
+                );
+                if !viewport.intersects(tile_rect) {
+                    continue;
+                }
+
+                let top = egui::pos2(cx, cy);
+                let right = egui::pos2(cx + half_w, cy + half_h);
+                let bottom = egui::pos2(cx, cy + 2.0 * half_h);
+                let left = egui::pos2(cx - half_w, cy + half_h);
+
+                if let Some(mesh) = dither_mesh.as_mut() {
+                    let base = mesh.vertices.len() as u32;
+                    let uv_top = egui::pos2(top.x / checker_repeat, top.y / checker_repeat);
+                    let uv_right =
+                        egui::pos2(right.x / checker_repeat, right.y / checker_repeat);
+                    let uv_bottom =
+                        egui::pos2(bottom.x / checker_repeat, bottom.y / checker_repeat);
+                    let uv_left = egui::pos2(left.x / checker_repeat, left.y / checker_repeat);
+
+                    mesh.vertices.push(egui::epaint::Vertex {
+                        pos: top,
+                        uv: uv_top,
+                        color: egui::Color32::WHITE,
+                    });
+                    mesh.vertices.push(egui::epaint::Vertex {
+                        pos: right,
+                        uv: uv_right,
+                        color: egui::Color32::WHITE,
+                    });
+                    mesh.vertices.push(egui::epaint::Vertex {
+                        pos: bottom,
+                        uv: uv_bottom,
+                        color: egui::Color32::WHITE,
+                    });
+                    mesh.vertices.push(egui::epaint::Vertex {
+                        pos: left,
+                        uv: uv_left,
+                        color: egui::Color32::WHITE,
+                    });
+                    mesh.indices.extend_from_slice(&[
+                        base,
+                        base + 1,
+                        base + 2,
+                        base,
+                        base + 2,
+                        base + 3,
+                    ]);
+                }
+
+            }
+        }
+
+        if let Some(mesh) = dither_mesh {
+            if !mesh.is_empty() {
+                painter.add(egui::Shape::mesh(mesh));
+            }
+        }
+
+        // Draw boundary edges in a second pass so they remain visible on top
+        // of the dither fill.
+        for row in 0..h {
+            for col in 0..w {
+                if !solid[row * w + col] {
+                    continue;
+                }
+
+                let cx = origin.x + (col as f32 - row as f32) * half_w;
+                let cy = origin.y + (col as f32 + row as f32) * half_h;
+                let tile_rect = egui::Rect::from_min_max(
+                    egui::pos2(cx - half_w, cy),
+                    egui::pos2(cx + half_w, cy + 2.0 * half_h),
+                );
+                if !viewport.intersects(tile_rect) {
+                    continue;
+                }
+
+                let top = egui::pos2(cx, cy);
+                let right = egui::pos2(cx + half_w, cy + half_h);
+                let bottom = egui::pos2(cx, cy + 2.0 * half_h);
+                let left = egui::pos2(cx - half_w, cy + half_h);
+
+                let c = col as i32;
+                let r = row as i32;
+                if !is_solid(c, r - 1) {
+                    painter.line_segment([top, right], edge_stroke);
+                }
+                if !is_solid(c + 1, r) {
+                    painter.line_segment([right, bottom], edge_stroke);
+                }
+                if !is_solid(c, r + 1) {
+                    painter.line_segment([bottom, left], edge_stroke);
+                }
+                if !is_solid(c - 1, r) {
+                    painter.line_segment([left, top], edge_stroke);
+                }
+            }
+        }
+    }
+
+    /// Build a flat bool grid indicating whether each tile is solid (impassable).
+    /// A tile is solid if `sotp[left_wall - 1] & 0xF == 0xF` or
+    /// `sotp[right_wall - 1] & 0xF == 0xF`.
+    fn build_solid_grid(map: &map::Map, sotp: &[u8]) -> Vec<bool> {
+        map.tiles
+            .iter()
+            .map(|tile| {
+                let left_solid = tile.left_wall > 0
+                    && sotp
+                        .get((tile.left_wall - 1) as usize)
+                        .map(|&b| b & 0xF == 0xF)
+                        .unwrap_or(false);
+                let right_solid = tile.right_wall > 0
+                    && sotp
+                        .get((tile.right_wall - 1) as usize)
+                        .map(|&b| b & 0xF == 0xF)
+                        .unwrap_or(false);
+                left_solid || right_solid
+            })
+            .collect()
     }
 
     fn screen_to_tile(

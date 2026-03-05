@@ -59,6 +59,10 @@ impl ExportDialog {
         self.scale_percent = 100;
     }
 
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
     /// Show the modal dialog. Returns the action taken.
     pub fn show(
         &mut self,

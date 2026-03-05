@@ -23,10 +23,12 @@ pub struct EditorApp {
     status_bar: StatusBarPanel,
     layer_visibility: LayerVisibility,
     show_grid: bool,
+    show_collision_overlay: bool,
     tile_atlas: Option<render::TileAtlas>,
     atlas_texture: Option<egui::TextureHandle>,
     wall_atlas: Option<render::SpriteAtlas>,
     wall_texture: Option<egui::TextureHandle>,
+    tab_overlay_texture: Option<egui::TextureHandle>,
     sotp_data: Option<Vec<u8>>,
     map_list: Option<MapList>,
     hover_tile: (u16, u16),
@@ -42,6 +44,7 @@ pub struct EditorApp {
     status_message: String,
     atlas_needs_upload: bool,
     wall_atlas_needs_upload: bool,
+    tab_overlay_texture_needs_upload: bool,
 }
 
 impl EditorApp {
@@ -63,6 +66,7 @@ impl EditorApp {
             status_bar: StatusBarPanel::default(),
             layer_visibility: LayerVisibility::default(),
             show_grid: true,
+            show_collision_overlay: false,
             atlas_needs_upload: tile_atlas.is_some(),
             wall_atlas_needs_upload: wall_atlas.is_some(),
             tile_atlas,
@@ -71,6 +75,7 @@ impl EditorApp {
             map_list,
             atlas_texture: None,
             wall_texture: None,
+            tab_overlay_texture: None,
             hover_tile: (0, 0),
             selected_tile: None,
             selected_ground_tile,
@@ -82,6 +87,7 @@ impl EditorApp {
             export_dialog: ExportDialog::default(),
             new_map_size_dialog: MapSizeDialog::default(),
             status_message: String::from("Ready"),
+            tab_overlay_texture_needs_upload: true,
         }
     }
 
@@ -405,6 +411,26 @@ impl EditorApp {
         self.wall_texture = Some(texture);
     }
 
+    /// Upload a tiny repeating checker texture used for tab collision overlay fill.
+    fn try_upload_tab_overlay_texture(&mut self, ctx: &egui::Context) {
+        if !self.tab_overlay_texture_needs_upload {
+            return;
+        }
+        self.tab_overlay_texture_needs_upload = false;
+
+        // 2x2 checker: opaque-white and transparent texels.
+        // Alpha 84 is ~33% opacity.
+        let pixels: [u8; 16] = [
+            255, 255, 255, 84, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 84,
+        ];
+        let texture = ctx.load_texture(
+            "tab_overlay_checker",
+            egui::ColorImage::from_rgba_unmultiplied([2, 2], &pixels),
+            egui::TextureOptions::NEAREST_REPEAT,
+        );
+        self.tab_overlay_texture = Some(texture);
+    }
+
     fn new_document(&mut self) {
         self.documents[self.active_tab].finish_ground_stroke();
         let map = &self.documents[self.active_tab].map;
@@ -721,6 +747,7 @@ impl EditorApp {
             export,
             tool,
             toggle_layer,
+            toggle_tab_overlay,
             keyboard_zoom,
             reset_zoom,
         ) = ctx.input(|i| {
@@ -750,7 +777,7 @@ impl EditorApp {
                 None
             };
 
-            // Layer/grid toggle shortcuts (Cmd+1/2/3/4)
+            // Layer toggle shortcuts (Cmd+1/2/3/4)
             let toggle_layer = if cmd && !shift {
                 if i.key_pressed(egui::Key::Num1) {
                     Some(1)
@@ -766,6 +793,9 @@ impl EditorApp {
             } else {
                 None
             };
+
+            // Collision overlay toggle (Tab)
+            let toggle_tab_overlay = !cmd && !shift && i.key_pressed(egui::Key::Tab);
 
             // Keyboard zoom (Cmd+/-, snap to 25%; Cmd+0 reset)
             let keyboard_zoom: Option<i8> = if cmd && !shift {
@@ -796,6 +826,7 @@ impl EditorApp {
                 cmd && i.key_pressed(egui::Key::E),
                 tool,
                 toggle_layer,
+                toggle_tab_overlay,
                 keyboard_zoom,
                 reset_zoom,
             )
@@ -811,6 +842,17 @@ impl EditorApp {
                 3 => self.layer_visibility.right_wall = !self.layer_visibility.right_wall,
                 4 => self.show_grid = !self.show_grid,
                 _ => {}
+            }
+        }
+        let tab_shortcut_blocked = self.export_dialog.is_open()
+            || self.new_map_size_dialog.is_open()
+            || self.status_bar.is_size_dialog_open();
+        if toggle_tab_overlay && !tab_shortcut_blocked {
+            if self.sotp_data.is_some() {
+                self.show_collision_overlay = !self.show_collision_overlay;
+            } else {
+                self.show_collision_overlay = false;
+                self.status_message = "Collision overlay unavailable: SOTP.DAT not loaded.".into();
             }
         }
         if let Some(dir) = keyboard_zoom {
@@ -912,6 +954,7 @@ impl eframe::App for EditorApp {
         // Deferred atlas uploads
         self.try_upload_atlas(ctx);
         self.try_upload_wall_atlas(ctx);
+        self.try_upload_tab_overlay_texture(ctx);
 
         WindowFrame::show(ctx);
 
@@ -1092,6 +1135,10 @@ impl eframe::App for EditorApp {
         }
 
         // Viewport needs mutable access to camera for panning
+        if self.sotp_data.is_none() {
+            self.show_collision_overlay = false;
+        }
+
         let doc = &mut self.documents[self.active_tab];
         let vp_result = ViewportPanel::show(
             ctx,
@@ -1106,8 +1153,11 @@ impl eframe::App for EditorApp {
             self.atlas_texture.as_ref(),
             self.wall_atlas.as_ref(),
             self.wall_texture.as_ref(),
+            self.tab_overlay_texture.as_ref(),
             &mut self.layer_visibility,
             &mut self.show_grid,
+            &mut self.show_collision_overlay,
+            self.sotp_data.as_deref(),
         );
         if let Some(tile) = vp_result.hover_tile {
             self.hover_tile = tile;

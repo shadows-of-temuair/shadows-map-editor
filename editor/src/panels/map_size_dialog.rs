@@ -20,6 +20,10 @@ impl MapSizeDialog {
         self.focus_width_on_open = true;
     }
 
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
     pub fn show(
         &mut self,
         ctx: &egui::Context,
