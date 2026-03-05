@@ -1,7 +1,7 @@
 use std::fmt;
 
-use crate::hpf::HpfSprite;
 use crate::Palette;
+use crate::hpf::HpfSprite;
 
 /// Maximum atlas dimension in pixels. Chosen to fit within common GPU limits.
 const MAX_ATLAS_SIDE: u32 = 8192;
@@ -64,6 +64,19 @@ impl SpriteAtlas {
         palette: &Palette,
         sprite_width: u32,
     ) -> Result<Self, SpriteAtlasError> {
+        Self::build_with_sprite_palette(sprites, sprite_width, |_| palette)
+    }
+
+    /// Build a sprite atlas from decoded HPF sprites, selecting the palette
+    /// per sprite ID.
+    pub fn build_with_sprite_palette<'a, F>(
+        sprites: &[Option<HpfSprite>],
+        sprite_width: u32,
+        mut palette_for_sprite: F,
+    ) -> Result<Self, SpriteAtlasError>
+    where
+        F: FnMut(u32) -> &'a Palette,
+    {
         // Count how many actual sprites we have.
         let real_count = sprites.iter().filter(|s| s.is_some()).count();
         if real_count == 0 {
@@ -80,9 +93,9 @@ impl SpriteAtlas {
 
         // Minimum columns needed: total_height / max_height, with 10% headroom
         // for imperfect bin packing.
-        let min_columns =
-            ((total_height * 11 / 10 + MAX_ATLAS_SIDE as u64 - 1) / MAX_ATLAS_SIDE as u64)
-                .max(1) as u32;
+        let min_columns = ((total_height * 11 / 10 + MAX_ATLAS_SIDE as u64 - 1)
+            / MAX_ATLAS_SIDE as u64)
+            .max(1) as u32;
         // Also cap width at MAX_ATLAS_SIDE
         let max_columns = MAX_ATLAS_SIDE / sprite_width;
         let columns = min_columns.max(1).min(max_columns).min(real_count as u32);
@@ -140,6 +153,7 @@ impl SpriteAtlas {
                 Some(e) => e,
                 None => continue,
             };
+            let palette = palette_for_sprite(i as u32);
 
             let sw = sprite.width as u32;
             let sh = sprite.height as u32;
