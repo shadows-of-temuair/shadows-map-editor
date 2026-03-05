@@ -28,6 +28,7 @@ pub struct EditorApp {
     selected_tile: Option<(u16, u16)>,
     selected_ground_tile: u16,
     last_pencil_click_tile: Option<(u16, u16)>,
+    line_tool_start_tile: Option<(u16, u16)>,
     export_dialog: ExportDialog,
     status_message: String,
     atlas_needs_upload: bool,
@@ -61,8 +62,21 @@ impl EditorApp {
             selected_tile: None,
             selected_ground_tile,
             last_pencil_click_tile: None,
+            line_tool_start_tile: None,
             export_dialog: ExportDialog::default(),
             status_message: String::from("Ready"),
+        }
+    }
+
+    fn clear_edit_anchors(&mut self) {
+        self.last_pencil_click_tile = None;
+        self.line_tool_start_tile = None;
+    }
+
+    fn set_active_tool(&mut self, tool: Tool) {
+        if self.active_tool != tool {
+            self.active_tool = tool;
+            self.line_tool_start_tile = None;
         }
     }
 
@@ -339,7 +353,7 @@ impl EditorApp {
         self.documents[self.active_tab].finish_ground_stroke();
         self.documents.push(MapDocument::new(50, 50));
         self.active_tab = self.documents.len() - 1;
-        self.last_pencil_click_tile = None;
+        self.clear_edit_anchors();
     }
 
     fn open_document(&mut self) {
@@ -353,7 +367,7 @@ impl EditorApp {
             for (i, doc) in self.documents.iter().enumerate() {
                 if doc.path.as_ref() == Some(&path) {
                     self.active_tab = i;
-                    self.last_pencil_click_tile = None;
+                    self.clear_edit_anchors();
                     return;
                 }
             }
@@ -362,7 +376,7 @@ impl EditorApp {
                 Ok(doc) => {
                     self.documents.push(doc);
                     self.active_tab = self.documents.len() - 1;
-                    self.last_pencil_click_tile = None;
+                    self.clear_edit_anchors();
                     info!("Opened map: {}", path.display());
                 }
                 Err(e) => {
@@ -479,7 +493,7 @@ impl EditorApp {
             // Don't close the last tab — replace with a fresh document
             self.documents[0] = MapDocument::new(50, 50);
             self.active_tab = 0;
-            self.last_pencil_click_tile = None;
+            self.clear_edit_anchors();
             return;
         }
 
@@ -489,7 +503,7 @@ impl EditorApp {
         } else if self.active_tab >= self.documents.len() {
             self.active_tab = self.documents.len() - 1;
         }
-        self.last_pencil_click_tile = None;
+        self.clear_edit_anchors();
     }
 
     fn undo_active_document(&mut self) {
@@ -568,6 +582,8 @@ impl EditorApp {
                     Some(Tool::Select)
                 } else if i.key_pressed(egui::Key::B) {
                     Some(Tool::Pencil)
+                } else if i.key_pressed(egui::Key::L) {
+                    Some(Tool::Line)
                 } else {
                     None
                 }
@@ -627,7 +643,7 @@ impl EditorApp {
         });
 
         if let Some(t) = tool {
-            self.active_tool = t;
+            self.set_active_tool(t);
         }
         if let Some(layer) = toggle_layer {
             match layer {
@@ -692,14 +708,14 @@ impl EditorApp {
                     .position(|doc| doc.path.as_ref() == Some(&path));
                 if let Some(i) = already_open {
                     self.active_tab = i;
-                    self.last_pencil_click_tile = None;
+                    self.clear_edit_anchors();
                     continue;
                 }
                 match MapDocument::open(path.clone()) {
                     Ok(doc) => {
                         self.documents.push(doc);
                         self.active_tab = self.documents.len() - 1;
-                        self.last_pencil_click_tile = None;
+                        self.clear_edit_anchors();
                         info!("Opened dropped map: {}", path.display());
                     }
                     Err(e) => {
@@ -750,7 +766,7 @@ impl eframe::App for EditorApp {
             TabBarAction::SwitchTab(i) => {
                 self.documents[self.active_tab].finish_ground_stroke();
                 self.active_tab = i;
-                self.last_pencil_click_tile = None;
+                self.clear_edit_anchors();
                 self.tab_bar.ensure_tab_visible(&self.documents, i);
             }
             TabBarAction::None => {}
@@ -781,7 +797,9 @@ impl eframe::App for EditorApp {
             StatusBarAction::None => {}
         }
 
-        let toolbar_action = ToolbarPanel::show(ctx, &mut self.active_tool, can_undo, can_redo);
+        let mut requested_tool = self.active_tool;
+        let toolbar_action = ToolbarPanel::show(ctx, &mut requested_tool, can_undo, can_redo);
+        self.set_active_tool(requested_tool);
         match toolbar_action {
             ToolbarAction::NewFile => self.new_document(),
             ToolbarAction::OpenFile => self.open_document(),
@@ -880,6 +898,7 @@ impl eframe::App for EditorApp {
             &mut doc.camera,
             self.active_tool,
             self.selected_ground_tile,
+            self.line_tool_start_tile,
             self.tile_atlas.as_ref(),
             self.atlas_texture.as_ref(),
             self.wall_atlas.as_ref(),
@@ -893,6 +912,15 @@ impl eframe::App for EditorApp {
         if let Some(tile) = vp_result.clicked_tile {
             self.selected_tile = Some(tile);
         }
+
+        let cancel_line = ctx.input(|i| {
+            i.key_pressed(egui::Key::Escape)
+                || i.pointer.button_pressed(egui::PointerButton::Secondary)
+        });
+        if cancel_line {
+            self.line_tool_start_tile = None;
+        }
+
         if self.active_tool == Tool::Pencil {
             if let Some(end) = vp_result.pencil_shift_clicked_tile {
                 doc.finish_ground_stroke();
@@ -902,6 +930,16 @@ impl eframe::App for EditorApp {
                 }
             } else if let Some(point) = vp_result.pencil_clicked_tile {
                 self.last_pencil_click_tile = Some(point);
+            }
+        } else if self.active_tool == Tool::Line {
+            if let Some(end) = vp_result.line_clicked_tile {
+                if let Some(start) = self.line_tool_start_tile {
+                    doc.finish_ground_stroke();
+                    Self::paint_ground_line(doc, self.selected_ground_tile, start, end);
+                    self.line_tool_start_tile = Some(end);
+                } else {
+                    self.line_tool_start_tile = Some(end);
+                }
             }
         }
         if let Some((col, row)) = vp_result.painted_tile {

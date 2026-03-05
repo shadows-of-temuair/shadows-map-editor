@@ -79,9 +79,12 @@ cargo run --release
 ### Editing
 
 - **B** — Switch to Pencil tool
+- **L** — Switch to Line tool
 - **Left click (Pencil)** — Paint the hovered tile
 - **Left drag (Pencil)** — Paint continuously while holding the mouse button
 - **Shift+Left click (Pencil)** — Draw a line from the last pencil click to the clicked tile (does nothing if there is no previous pencil click)
+- **Left click (Line)** — First click sets the line start, next click paints a line to that point (live preview shown while hovering)
+- **Esc** or **Right click (Line)** — Cancel the pending line start point
 
 ### Export
 

@@ -21,6 +21,7 @@ pub enum ToolbarAction {
 pub enum Tool {
     Select,
     Pencil,
+    Line,
     Eraser,
     Fill,
     Eyedropper,
@@ -32,6 +33,7 @@ impl Tool {
         match self {
             Tool::Select => "Select (V)",
             Tool::Pencil => "Pencil (B)",
+            Tool::Line => "Line (L)",
             Tool::Eraser => "Eraser (E)",
             Tool::Fill => "Fill (G)",
             Tool::Eyedropper => "Eyedropper (I)",
@@ -43,6 +45,7 @@ impl Tool {
         match self {
             Tool::Select => icons::draw_icon_select(painter, rect, color),
             Tool::Pencil => icons::draw_icon_pencil(painter, rect, color),
+            Tool::Line => icons::draw_icon_line(painter, rect, color),
             Tool::Eraser => icons::draw_icon_eraser(painter, rect, color),
             Tool::Fill => icons::draw_icon_fill(painter, rect, color),
             Tool::Eyedropper => icons::draw_icon_eyedropper(painter, rect, color),
@@ -145,7 +148,7 @@ impl ToolbarPanel {
             ui.add_space(2.0);
 
             // --- Drawing tools ---
-            for &tool in &[Tool::Select, Tool::Pencil] {
+            for &tool in &[Tool::Select, Tool::Pencil, Tool::Line] {
                 let is_active = *active_tool == tool;
                 let response = Self::tool_button(ui, tool, is_active, colors);
                 if response.clicked() {

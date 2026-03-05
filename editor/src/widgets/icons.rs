@@ -52,7 +52,10 @@ pub fn draw_icon_save(painter: &egui::Painter, rect: egui::Rect, color: egui::Co
     // Metal shutter (top inset rectangle)
     let st = s * 0.4;
     painter.line_segment(
-        [egui::pos2(c.x - st, c.y - s), egui::pos2(c.x - st, c.y - s * 0.3)],
+        [
+            egui::pos2(c.x - st, c.y - s),
+            egui::pos2(c.x - st, c.y - s * 0.3),
+        ],
         stroke,
     );
     painter.line_segment(
@@ -63,7 +66,10 @@ pub fn draw_icon_save(painter: &egui::Painter, rect: egui::Rect, color: egui::Co
         stroke,
     );
     painter.line_segment(
-        [egui::pos2(c.x + st, c.y - s * 0.3), egui::pos2(c.x + st, c.y - s)],
+        [
+            egui::pos2(c.x + st, c.y - s * 0.3),
+            egui::pos2(c.x + st, c.y - s),
+        ],
         stroke,
     );
 
@@ -87,23 +93,41 @@ pub fn draw_icon_export(painter: &egui::Painter, rect: egui::Rect, color: egui::
     let box_bot = c.y + s;
     let box_l = c.x - s;
     let box_r = c.x + s;
-    painter.line_segment([egui::pos2(box_l, box_top), egui::pos2(box_l, box_bot)], stroke);
-    painter.line_segment([egui::pos2(box_l, box_bot), egui::pos2(box_r, box_bot)], stroke);
-    painter.line_segment([egui::pos2(box_r, box_bot), egui::pos2(box_r, box_top)], stroke);
+    painter.line_segment(
+        [egui::pos2(box_l, box_top), egui::pos2(box_l, box_bot)],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(box_l, box_bot), egui::pos2(box_r, box_bot)],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(box_r, box_bot), egui::pos2(box_r, box_top)],
+        stroke,
+    );
 
     // Upward arrow shaft
     let arrow_top = c.y - s;
     let arrow_bot = c.y + s * 0.4;
-    painter.line_segment([egui::pos2(c.x, arrow_top), egui::pos2(c.x, arrow_bot)], stroke);
+    painter.line_segment(
+        [egui::pos2(c.x, arrow_top), egui::pos2(c.x, arrow_bot)],
+        stroke,
+    );
 
     // Arrowhead
     let ah = s * 0.35;
     painter.line_segment(
-        [egui::pos2(c.x, arrow_top), egui::pos2(c.x - ah, arrow_top + ah)],
+        [
+            egui::pos2(c.x, arrow_top),
+            egui::pos2(c.x - ah, arrow_top + ah),
+        ],
         stroke,
     );
     painter.line_segment(
-        [egui::pos2(c.x, arrow_top), egui::pos2(c.x + ah, arrow_top + ah)],
+        [
+            egui::pos2(c.x, arrow_top),
+            egui::pos2(c.x + ah, arrow_top + ah),
+        ],
         stroke,
     );
 }
@@ -245,6 +269,19 @@ pub fn draw_icon_rectangle(painter: &egui::Painter, rect: egui::Rect, color: egu
     painter.rect_stroke(inner, 0.0, stroke, egui::StrokeKind::Inside);
 }
 
+/// Draw a simple diagonal segment with endpoints (Line tool).
+pub fn draw_icon_line(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    let s = rect.width().min(rect.height()) * 0.30;
+    let stroke = egui::Stroke::new(1.5, color);
+
+    let start = egui::pos2(c.x - s, c.y + s * 0.8);
+    let end = egui::pos2(c.x + s, c.y - s * 0.8);
+    painter.line_segment([start, end], stroke);
+    painter.circle_filled(start, 1.6, color);
+    painter.circle_filled(end, 1.6, color);
+}
+
 /// Draw a curved left-pointing arrow (Undo).
 pub fn draw_icon_undo(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let c = rect.center();
@@ -271,11 +308,17 @@ pub fn draw_icon_undo(painter: &egui::Painter, rect: egui::Rect, color: egui::Co
     let tip_y = arc_cy;
     let ah = s * 0.7;
     painter.line_segment(
-        [egui::pos2(tip_x + ah * 0.45, tip_y - ah * 0.55), egui::pos2(tip_x - ah * 0.15, tip_y + ah * 0.25)],
+        [
+            egui::pos2(tip_x + ah * 0.45, tip_y - ah * 0.55),
+            egui::pos2(tip_x - ah * 0.15, tip_y + ah * 0.25),
+        ],
         stroke,
     );
     painter.line_segment(
-        [egui::pos2(tip_x - ah * 0.15, tip_y + ah * 0.25), egui::pos2(tip_x + ah * 0.55, tip_y + ah * 0.55)],
+        [
+            egui::pos2(tip_x - ah * 0.15, tip_y + ah * 0.25),
+            egui::pos2(tip_x + ah * 0.55, tip_y + ah * 0.55),
+        ],
         stroke,
     );
 }
@@ -306,11 +349,17 @@ pub fn draw_icon_redo(painter: &egui::Painter, rect: egui::Rect, color: egui::Co
     let tip_y = arc_cy;
     let ah = s * 0.7;
     painter.line_segment(
-        [egui::pos2(tip_x - ah * 0.45, tip_y - ah * 0.55), egui::pos2(tip_x + ah * 0.15, tip_y + ah * 0.25)],
+        [
+            egui::pos2(tip_x - ah * 0.45, tip_y - ah * 0.55),
+            egui::pos2(tip_x + ah * 0.15, tip_y + ah * 0.25),
+        ],
         stroke,
     );
     painter.line_segment(
-        [egui::pos2(tip_x + ah * 0.15, tip_y + ah * 0.25), egui::pos2(tip_x - ah * 0.55, tip_y + ah * 0.55)],
+        [
+            egui::pos2(tip_x + ah * 0.15, tip_y + ah * 0.25),
+            egui::pos2(tip_x - ah * 0.55, tip_y + ah * 0.55),
+        ],
         stroke,
     );
 }

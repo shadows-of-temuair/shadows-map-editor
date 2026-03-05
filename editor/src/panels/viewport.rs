@@ -23,6 +23,7 @@ pub struct ViewportResult {
     pub painted_tile: Option<(u16, u16)>,
     pub pencil_clicked_tile: Option<(u16, u16)>,
     pub pencil_shift_clicked_tile: Option<(u16, u16)>,
+    pub line_clicked_tile: Option<(u16, u16)>,
 }
 
 pub struct ViewportPanel;
@@ -34,6 +35,7 @@ impl ViewportPanel {
         camera: &mut Camera,
         active_tool: Tool,
         selected_ground_tile: u16,
+        line_preview_start: Option<(u16, u16)>,
         tile_atlas: Option<&render::TileAtlas>,
         atlas_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
@@ -131,36 +133,73 @@ impl ViewportPanel {
                         if let Some((col, row)) = tile {
                             result.hover_tile = Some((col, row));
 
-                            if active_tool == Tool::Pencil && selected_ground_tile != 0 {
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-                                Self::draw_ground_preview(
-                                    &painter,
-                                    col,
-                                    row,
-                                    origin,
-                                    half_w,
-                                    half_h,
-                                    tile_atlas,
-                                    atlas_texture,
-                                    selected_ground_tile,
-                                );
-                                let shift_held = ui.input(|i| i.modifiers.shift);
-                                if response.clicked_by(egui::PointerButton::Primary) {
-                                    if shift_held {
-                                        result.pencil_shift_clicked_tile = Some((col, row));
-                                    } else {
-                                        result.pencil_clicked_tile = Some((col, row));
+                            match active_tool {
+                                Tool::Pencil if selected_ground_tile != 0 => {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                                    Self::draw_ground_preview(
+                                        &painter,
+                                        col,
+                                        row,
+                                        origin,
+                                        half_w,
+                                        half_h,
+                                        tile_atlas,
+                                        atlas_texture,
+                                        selected_ground_tile,
+                                    );
+                                    let shift_held = ui.input(|i| i.modifiers.shift);
+                                    if response.clicked_by(egui::PointerButton::Primary) {
+                                        if shift_held {
+                                            result.pencil_shift_clicked_tile = Some((col, row));
+                                        } else {
+                                            result.pencil_clicked_tile = Some((col, row));
+                                        }
+                                    }
+                                    let is_primary_painting = response.is_pointer_button_down_on()
+                                        && ui.input(|i| {
+                                            i.pointer.button_down(egui::PointerButton::Primary)
+                                        });
+                                    if is_primary_painting && !shift_held {
+                                        result.painted_tile = Some((col, row));
                                     }
                                 }
-                                let is_primary_painting = response.is_pointer_button_down_on()
-                                    && ui.input(|i| {
-                                        i.pointer.button_down(egui::PointerButton::Primary)
-                                    });
-                                if is_primary_painting && !shift_held {
-                                    result.painted_tile = Some((col, row));
+                                Tool::Line if selected_ground_tile != 0 => {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                                    if let Some(start) = line_preview_start {
+                                        Self::draw_ground_line_preview(
+                                            &painter,
+                                            start,
+                                            (col, row),
+                                            origin,
+                                            half_w,
+                                            half_h,
+                                            tile_atlas,
+                                            atlas_texture,
+                                            selected_ground_tile,
+                                        );
+                                    } else {
+                                        Self::draw_ground_preview(
+                                            &painter,
+                                            col,
+                                            row,
+                                            origin,
+                                            half_w,
+                                            half_h,
+                                            tile_atlas,
+                                            atlas_texture,
+                                            selected_ground_tile,
+                                        );
+                                    }
+                                    if response.clicked_by(egui::PointerButton::Primary) {
+                                        result.line_clicked_tile = Some((col, row));
+                                        result.clicked_tile = Some((col, row));
+                                    }
                                 }
-                            } else if response.clicked_by(egui::PointerButton::Primary) {
-                                result.clicked_tile = Some((col, row));
+                                _ => {
+                                    if response.clicked_by(egui::PointerButton::Primary) {
+                                        result.clicked_tile = Some((col, row));
+                                    }
+                                }
                             }
 
                             Self::draw_tile_highlight(
@@ -630,5 +669,57 @@ impl ViewportPanel {
             egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180),
         );
         painter.add(egui::Shape::mesh(mesh));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_ground_line_preview(
+        painter: &egui::Painter,
+        start: (u16, u16),
+        end: (u16, u16),
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+        tile_atlas: Option<&render::TileAtlas>,
+        tile_texture: Option<&egui::TextureHandle>,
+        selected_ground_tile: u16,
+    ) {
+        let (mut x0, mut y0) = (start.0 as i32, start.1 as i32);
+        let (x1, y1) = (end.0 as i32, end.1 as i32);
+
+        let dx = (x1 - x0).abs();
+        let sx = if x0 < x1 { 1 } else { -1 };
+        let dy = -(y1 - y0).abs();
+        let sy = if y0 < y1 { 1 } else { -1 };
+        let mut err = dx + dy;
+
+        loop {
+            if x0 >= 0 && y0 >= 0 {
+                Self::draw_ground_preview(
+                    painter,
+                    x0 as u16,
+                    y0 as u16,
+                    origin,
+                    half_w,
+                    half_h,
+                    tile_atlas,
+                    tile_texture,
+                    selected_ground_tile,
+                );
+            }
+
+            if x0 == x1 && y0 == y1 {
+                break;
+            }
+
+            let e2 = 2 * err;
+            if e2 >= dy {
+                err += dy;
+                x0 += sx;
+            }
+            if e2 <= dx {
+                err += dx;
+                y0 += sy;
+            }
+        }
     }
 }
