@@ -79,15 +79,24 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          cd target/${{ matrix.target }}/release
-          tar czf ../../../${{ matrix.artifact }}.tar.gz map-editor
+          pkg_dir="${{ matrix.artifact }}-package"
+          mkdir -p "$pkg_dir"
+          cp "target/${{ matrix.target }}/release/map-editor" "$pkg_dir/"
+          cp "maps.ron" "$pkg_dir/"
+          tar -C "$pkg_dir" -czf "${{ matrix.artifact }}.tar.gz" map-editor maps.ron
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path target/${{ matrix.target }}/release/map-editor.exe `
-            -DestinationPath ${{ matrix.artifact }}.zip
+          $pkgDir = "${{ matrix.artifact }}-package"
+          New-Item -ItemType Directory -Path $pkgDir -Force | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/map-editor.exe" -Destination "$pkgDir/map-editor.exe" -Force
+          Copy-Item "maps.ron" -Destination "$pkgDir/maps.ron" -Force
+          if (Test-Path "${{ matrix.artifact }}.zip") {
+            Remove-Item "${{ matrix.artifact }}.zip" -Force
+          }
+          Compress-Archive -Path "$pkgDir/*" -DestinationPath "${{ matrix.artifact }}.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
