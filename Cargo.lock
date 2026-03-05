@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "archive"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "memmap2",
 ]
@@ -470,6 +470,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -495,6 +501,9 @@ name = "bitflags"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
+dependencies = [
+ "serde_core",
+]
 
 [[package]]
 name = "block"
@@ -865,7 +874,7 @@ dependencies = [
 
 [[package]]
 name = "editor"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "archive",
  "eframe",
@@ -875,6 +884,8 @@ dependencies = [
  "png 0.18.1",
  "render",
  "rfd",
+ "ron",
+ "serde",
  "tracing",
  "tracing-subscriber",
  "winresource",
@@ -1793,7 +1804,7 @@ dependencies = [
 
 [[package]]
 name = "map"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "matchers"
@@ -2621,7 +2632,7 @@ checksum = "a96887878f22d7bad8a3b6dc5b7440e0ada9a245242924394987b21cf2210a4c"
 
 [[package]]
 name = "render"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "archive",
  "png 0.18.1",
@@ -2655,6 +2666,19 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "ron"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db09040cc89e461f1a265139777a2bde7f8d8c67c4936f700c63ce3e2904d468"
+dependencies = [
+ "base64",
+ "bitflags 2.11.0",
+ "serde",
+ "serde_derive",
+ "unicode-ident",
 ]
 
 [[package]]

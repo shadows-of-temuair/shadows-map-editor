@@ -79,6 +79,10 @@ impl ViewportPanel {
                 if is_panning {
                     camera.offset -= response.drag_delta();
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                } else if response.hovered() {
+                    // Prevent cursor icon from getting "stuck" when switching
+                    // away from crosshair-based tools.
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
                 }
 
                 // Mouse wheel zoom (only when the viewport is hovered).
@@ -349,12 +353,14 @@ impl ViewportPanel {
         let th = half_h * 2.0;
         let zoom = half_w / (map::TILE_WIDTH / 2.0);
 
-        let max_depth = map.width as u16 + map.height as u16;
+        let width = map.width as u32;
+        let height = map.height as u32;
+        let max_depth = width + height;
 
         for depth in 0..max_depth {
             // All (col, row) pairs with col + row == depth, within map bounds.
-            let row_min = depth.saturating_sub(map.width - 1);
-            let row_max = depth.min(map.height - 1);
+            let row_min = depth.saturating_sub(width.saturating_sub(1));
+            let row_max = depth.min(height.saturating_sub(1));
 
             // Batch ground tiles for this depth band.
             let mut ground_mesh = tile_texture
@@ -368,7 +374,7 @@ impl ViewportPanel {
 
             for row in row_min..=row_max {
                 let col = depth - row;
-                let tile = &map.tiles[row as usize * map.width as usize + col as usize];
+                let tile = &map.tiles[row as usize * width as usize + col as usize];
 
                 let cx = origin.x + (col as f32 - row as f32) * half_w;
                 let cy = origin.y + (col as f32 + row as f32) * half_h;

@@ -4,11 +4,12 @@ use eframe::egui;
 use tracing::{info, warn};
 
 use crate::document::{LayerVisibility, MapDocument};
+use crate::map_list::{MapList, MapMetadataHint};
 use crate::palette_lookup::LoadedPaletteLookup;
 use crate::panels::{
-    ExportDialog, ExportDialogAction, EyedropperPick, InspectorPanel, StatusBarAction,
-    StatusBarPanel, TabBarAction, TabBarPanel, TitleBarPanel, Tool, ToolbarAction, ToolbarPanel,
-    ViewportPanel, WindowFrame,
+    ExportDialog, ExportDialogAction, EyedropperPick, InspectorPanel, MapSizeDialog,
+    StatusBarAction, StatusBarPanel, TabBarAction, TabBarPanel, TitleBarPanel, Tool, ToolbarAction,
+    ToolbarPanel, ViewportPanel, WindowFrame,
 };
 use crate::shape::{self, ShapeKind};
 use crate::theme;
@@ -19,6 +20,7 @@ pub struct EditorApp {
     active_tool: Tool,
     active_shape_kind: ShapeKind,
     tab_bar: TabBarPanel,
+    status_bar: StatusBarPanel,
     layer_visibility: LayerVisibility,
     show_grid: bool,
     tile_atlas: Option<render::TileAtlas>,
@@ -26,6 +28,7 @@ pub struct EditorApp {
     wall_atlas: Option<render::SpriteAtlas>,
     wall_texture: Option<egui::TextureHandle>,
     sotp_data: Option<Vec<u8>>,
+    map_list: Option<MapList>,
     hover_tile: (u16, u16),
     selected_tile: Option<(u16, u16)>,
     selected_ground_tile: u16,
@@ -35,6 +38,7 @@ pub struct EditorApp {
     line_tool_start_tile: Option<(u16, u16)>,
     shape_tool_start_tile: Option<(u16, u16)>,
     export_dialog: ExportDialog,
+    new_map_size_dialog: MapSizeDialog,
     status_message: String,
     atlas_needs_upload: bool,
     wall_atlas_needs_upload: bool,
@@ -47,6 +51,7 @@ impl EditorApp {
         // Build atlases CPU-side; texture uploads are deferred to first frame
         // because the renderer hasn't reported the real GPU max texture size yet.
         let (tile_atlas, wall_atlas, sotp_data) = Self::load_assets();
+        let map_list = MapList::load_if_exists("maps.ron");
         let selected_ground_tile = if tile_atlas.is_some() { 1 } else { 0 };
 
         Self {
@@ -55,6 +60,7 @@ impl EditorApp {
             active_tool: Tool::Pencil,
             active_shape_kind: ShapeKind::Rect,
             tab_bar: TabBarPanel::default(),
+            status_bar: StatusBarPanel::default(),
             layer_visibility: LayerVisibility::default(),
             show_grid: true,
             atlas_needs_upload: tile_atlas.is_some(),
@@ -62,6 +68,7 @@ impl EditorApp {
             tile_atlas,
             wall_atlas,
             sotp_data,
+            map_list,
             atlas_texture: None,
             wall_texture: None,
             hover_tile: (0, 0),
@@ -73,6 +80,7 @@ impl EditorApp {
             line_tool_start_tile: None,
             shape_tool_start_tile: None,
             export_dialog: ExportDialog::default(),
+            new_map_size_dialog: MapSizeDialog::default(),
             status_message: String::from("Ready"),
         }
     }
@@ -81,6 +89,12 @@ impl EditorApp {
         self.last_pencil_click_tile = None;
         self.line_tool_start_tile = None;
         self.shape_tool_start_tile = None;
+    }
+
+    fn map_hint_for_path(&self, path: &std::path::Path) -> Option<MapMetadataHint> {
+        self.map_list
+            .as_ref()
+            .and_then(|map_list| map_list.hint_for_path(path))
     }
 
     fn set_active_tool(&mut self, tool: Tool) {
@@ -145,6 +159,14 @@ impl EditorApp {
                 lookup.mapping_count()
             );
         }
+        let wall_palette_lookup = LoadedPaletteLookup::from_pool(&pool, "stc");
+        if let Some(lookup) = &wall_palette_lookup {
+            info!(
+                "Detected stc palette-table assets ({} palettes, {} mappings)",
+                lookup.palette_count(),
+                lookup.mapping_count()
+            );
+        }
 
         // Ground tile atlas
         let tile_atlas = match Self::get_pool_asset_case_insensitive(&pool, "TILEA.BMP") {
@@ -205,12 +227,30 @@ impl EditorApp {
         };
 
         // Wall sprite atlas from HPF files
-        let wall_atlas = match legacy_palette.as_ref() {
-            Some(palette) => Self::load_wall_atlas(&pool, palette),
-            None => {
-                warn!("No legacy palette available for STC wall sprite rendering");
-                None
+        let wall_atlas = if let Some(lookup) = wall_palette_lookup.as_ref() {
+            match legacy_palette
+                .as_ref()
+                .or_else(|| lookup.fallback_palette())
+            {
+                Some(default_palette) => {
+                    info!("Rendering STC wall sprites using stc palette-table mode");
+                    Self::load_wall_atlas(&pool, |wall_id| {
+                        lookup
+                            .palette_for_id(wall_id + 1)
+                            .unwrap_or(default_palette)
+                    })
+                }
+                None => {
+                    warn!("No fallback palette available for stc palette-table rendering");
+                    None
+                }
             }
+        } else if let Some(palette) = legacy_palette.as_ref() {
+            info!("Rendering STC wall sprites using legacy legend palette");
+            Self::load_wall_atlas(&pool, |_| palette)
+        } else {
+            warn!("No usable palette found for STC wall sprite rendering");
+            None
         };
 
         // SOTP collision data
@@ -227,10 +267,13 @@ impl EditorApp {
 
     /// Probe for `stcNNNNN.hpf` files in the asset pool, decode them, and
     /// pack into a single sprite atlas.
-    fn load_wall_atlas(
+    fn load_wall_atlas<'a, F>(
         pool: &archive::AssetPool,
-        palette: &render::Palette,
-    ) -> Option<render::SpriteAtlas> {
+        mut palette_for_wall: F,
+    ) -> Option<render::SpriteAtlas>
+    where
+        F: FnMut(u32) -> &'a render::Palette,
+    {
         let mut sprites: Vec<Option<render::HpfSprite>> = Vec::new();
         let mut last_found = 0u32;
         let mut found_count = 0u32;
@@ -277,7 +320,9 @@ impl EditorApp {
             return None;
         }
 
-        match render::SpriteAtlas::build(&sprites, palette, 28) {
+        match render::SpriteAtlas::build_with_sprite_palette(&sprites, 28, |wall_id| {
+            palette_for_wall(wall_id)
+        }) {
             Ok(atlas) => {
                 let (w, h) = atlas.dimensions();
                 info!(
@@ -362,9 +407,19 @@ impl EditorApp {
 
     fn new_document(&mut self) {
         self.documents[self.active_tab].finish_ground_stroke();
-        self.documents.push(MapDocument::new(50, 50));
+        let map = &self.documents[self.active_tab].map;
+        self.new_map_size_dialog.open(map.width, map.height);
+    }
+
+    fn create_document_with_dimensions(&mut self, width: u16, height: u16) {
+        if width == 0 || height == 0 {
+            self.status_message = "Width and height must both be at least 1.".to_string();
+            return;
+        }
+        self.documents.push(MapDocument::new(width, height));
         self.active_tab = self.documents.len() - 1;
         self.clear_edit_anchors();
+        self.status_message = format!("Created new map {}x{}", width, height);
     }
 
     fn open_document(&mut self) {
@@ -383,7 +438,8 @@ impl EditorApp {
                 }
             }
 
-            match MapDocument::open(path.clone()) {
+            let hint = self.map_hint_for_path(&path);
+            match MapDocument::open(path.clone(), hint) {
                 Ok(doc) => {
                     self.documents.push(doc);
                     self.active_tab = self.documents.len() - 1;
@@ -814,7 +870,8 @@ impl EditorApp {
                     self.clear_edit_anchors();
                     continue;
                 }
-                match MapDocument::open(path.clone()) {
+                let hint = self.map_hint_for_path(&path);
+                match MapDocument::open(path.clone(), hint) {
                     Ok(doc) => {
                         self.documents.push(doc);
                         self.active_tab = self.documents.len() - 1;
@@ -879,15 +936,26 @@ impl eframe::App for EditorApp {
         let can_undo = doc.can_undo();
         let can_redo = doc.can_redo();
         let current_zoom = doc.camera.zoom;
+        let current_file_label = {
+            let base = doc
+                .path
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| doc.display_name());
+            if doc.dirty { format!("{base} *") } else { base }
+        };
         let alt_held = ctx.input(|i| i.modifiers.alt);
         let effective_tool = if alt_held {
             Tool::Eyedropper
         } else {
             self.active_tool
         };
-        let status_action = StatusBarPanel::show(
+        let status_action = self.status_bar.show(
             ctx,
             &doc.map,
+            &current_file_label,
             effective_tool,
             self.hover_tile,
             current_zoom,
@@ -901,7 +969,11 @@ impl eframe::App for EditorApp {
                 Self::snap_zoom(&mut self.documents[self.active_tab].camera, -1);
             }
             StatusBarAction::SetDimensions(w, h) => {
-                self.documents[self.active_tab].set_dimensions(w, h);
+                if let Err(err) = self.documents[self.active_tab].set_dimensions(w, h) {
+                    self.status_message = err;
+                } else {
+                    self.status_message = format!("Resized map to {}x{}", w, h);
+                }
             }
             StatusBarAction::None => {}
         }
@@ -933,6 +1005,13 @@ impl eframe::App for EditorApp {
                 self.export_dialog.open_for(&doc_name);
             }
             ToolbarAction::None => {}
+        }
+
+        if let Some((width, height)) =
+            self.new_map_size_dialog
+                .show(ctx, "new_map_size_dialog", "New Map", "Create", None)
+        {
+            self.create_document_with_dimensions(width, height);
         }
 
         // Export dialog

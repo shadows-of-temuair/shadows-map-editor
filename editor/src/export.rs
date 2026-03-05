@@ -88,15 +88,17 @@ pub fn export_map_png(
     let wall_pixels = wall_atlas.pixels();
     let (wall_atlas_w, _) = wall_atlas.dimensions();
 
-    let max_depth = map.width as u16 + map.height as u16;
+    let width = map.width as u32;
+    let height = map.height as u32;
+    let max_depth = width + height;
 
     for depth in 0..max_depth {
-        let row_min = depth.saturating_sub(map.width - 1);
-        let row_max = depth.min(map.height - 1);
+        let row_min = depth.saturating_sub(width.saturating_sub(1));
+        let row_max = depth.min(height.saturating_sub(1));
 
         for row in row_min..=row_max {
             let col = depth - row;
-            let tile = &map.tiles[row as usize * map.width as usize + col as usize];
+            let tile = &map.tiles[row as usize * width as usize + col as usize];
 
             let cx = origin_x + (col as f32 - row as f32) * half_w;
             let cy = origin_y + (col as f32 + row as f32) * half_h;

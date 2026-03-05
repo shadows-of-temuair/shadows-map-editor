@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
 use eframe::egui;
+use tracing::warn;
+
+use crate::map_list::MapMetadataHint;
 
 #[derive(Clone, Copy)]
 #[allow(dead_code)]
@@ -83,6 +86,8 @@ pub struct MapDocument {
     pub map: map::Map,
     pub path: Option<PathBuf>,
     pub dirty: bool,
+    pub map_id_hint: Option<u32>,
+    pub map_name_hint: Option<String>,
     pub camera: Camera,
     undo_stack: Vec<Vec<EditChange>>,
     redo_stack: Vec<Vec<EditChange>>,
@@ -95,6 +100,8 @@ impl MapDocument {
             map: map::Map::new(width, height),
             path: None,
             dirty: false,
+            map_id_hint: None,
+            map_name_hint: None,
             camera: Camera::default(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -102,12 +109,35 @@ impl MapDocument {
         }
     }
 
-    pub fn open(path: PathBuf) -> std::io::Result<Self> {
-        let map = map::Map::load(&path)?;
+    pub fn open(path: PathBuf, metadata_hint: Option<MapMetadataHint>) -> std::io::Result<Self> {
+        let mut map = map::Map::load(&path)?;
+
+        let map_id_hint = metadata_hint.as_ref().map(|hint| hint.map_id);
+        let map_name_hint = metadata_hint.as_ref().map(|hint| hint.map_name.clone());
+
+        if let Some((width, height)) = metadata_hint.and_then(|hint| hint.map_size) {
+            let hinted_count = width as usize * height as usize;
+            if hinted_count == map.tiles.len() {
+                map.width = width;
+                map.height = height;
+            } else {
+                warn!(
+                    "Ignoring maps.ron size hint {}x{} for {}: tile count mismatch (hint={}, actual={})",
+                    width,
+                    height,
+                    path.display(),
+                    hinted_count,
+                    map.tiles.len()
+                );
+            }
+        }
+
         Ok(Self {
             map,
             path: Some(path),
             dirty: false,
+            map_id_hint,
+            map_name_hint,
             camera: Camera::default(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -132,17 +162,54 @@ impl MapDocument {
         Ok(())
     }
 
-    pub fn set_dimensions(&mut self, width: u16, height: u16) {
+    pub fn set_dimensions(&mut self, width: u16, height: u16) -> Result<(), String> {
         self.finish_ground_stroke();
+        if width == 0 || height == 0 {
+            return Err("Width and height must both be at least 1.".to_string());
+        }
+
+        let old_width = self.map.width as usize;
+        let old_height = self.map.height as usize;
+        let new_width = width as usize;
+        let new_height = height as usize;
+        let new_count = new_width * new_height;
+
+        let mut new_tiles = Vec::new();
+        if let Err(err) = new_tiles.try_reserve_exact(new_count) {
+            return Err(format!(
+                "Unable to resize map to {}x{} ({} tiles): {}",
+                width, height, new_count, err
+            ));
+        }
+        new_tiles.resize(new_count, map::Tile::default());
+
+        let copy_w = old_width.min(new_width);
+        let copy_h = old_height.min(new_height);
+        for row in 0..copy_h {
+            let old_start = row * old_width;
+            let new_start = row * new_width;
+            new_tiles[new_start..new_start + copy_w]
+                .copy_from_slice(&self.map.tiles[old_start..old_start + copy_w]);
+        }
+
         self.map.width = width;
         self.map.height = height;
+        self.map.tiles = new_tiles;
         self.camera = Camera::default();
         self.dirty = true;
         self.undo_stack.clear();
         self.redo_stack.clear();
+        Ok(())
     }
 
     pub fn display_name(&self) -> String {
+        if let Some(name) = &self.map_name_hint {
+            if let Some(map_id) = self.map_id_hint {
+                return format!("{map_id} - {name}");
+            }
+            return name.clone();
+        }
+
         match &self.path {
             Some(p) => p
                 .file_name()
@@ -261,5 +328,48 @@ impl MapDocument {
         self.undo_stack.push(batch);
         self.dirty = true;
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resize_grows_and_preserves_existing_tiles() {
+        let mut doc = MapDocument::new(2, 2);
+        doc.map.tiles[0].ground = 10;
+        doc.map.tiles[1].ground = 11;
+        doc.map.tiles[2].ground = 12;
+        doc.map.tiles[3].ground = 13;
+
+        doc.set_dimensions(3, 3).unwrap();
+
+        assert_eq!(doc.map.width, 3);
+        assert_eq!(doc.map.height, 3);
+        assert_eq!(doc.map.tiles.len(), 9);
+        assert_eq!(doc.map.tiles[0].ground, 10);
+        assert_eq!(doc.map.tiles[1].ground, 11);
+        assert_eq!(doc.map.tiles[3].ground, 12);
+        assert_eq!(doc.map.tiles[4].ground, 13);
+        assert_eq!(doc.map.tiles[8].ground, 0);
+    }
+
+    #[test]
+    fn resize_shrinks_and_keeps_top_left_region() {
+        let mut doc = MapDocument::new(3, 2);
+        for (idx, tile) in doc.map.tiles.iter_mut().enumerate() {
+            tile.ground = idx as u16 + 1;
+        }
+
+        doc.set_dimensions(2, 2).unwrap();
+
+        assert_eq!(doc.map.width, 2);
+        assert_eq!(doc.map.height, 2);
+        assert_eq!(doc.map.tiles.len(), 4);
+        assert_eq!(doc.map.tiles[0].ground, 1);
+        assert_eq!(doc.map.tiles[1].ground, 2);
+        assert_eq!(doc.map.tiles[2].ground, 4);
+        assert_eq!(doc.map.tiles[3].ground, 5);
     }
 }

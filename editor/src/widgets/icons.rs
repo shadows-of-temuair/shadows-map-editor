@@ -311,84 +311,30 @@ pub fn draw_icon_line(painter: &egui::Painter, rect: egui::Rect, color: egui::Co
     painter.circle_filled(end, 1.6, color);
 }
 
-/// Draw a curved left-pointing arrow (Undo).
+/// Draw a simple left-pointing arrow (Undo).
 pub fn draw_icon_undo(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let c = rect.center();
-    let s = rect.width().min(rect.height()) * 0.30;
+    let s = rect.width().min(rect.height()) * 0.28;
     let stroke = egui::Stroke::new(1.5, color);
 
-    // Arc: semicircle from right, over the top, to the left
-    let r = s * 0.8;
-    let arc_cx = c.x + s * 0.05;
-    let arc_cy = c.y + s * 0.15;
-    let segments = 10;
-    let start_angle: f32 = 0.0;
-    let end_angle = std::f32::consts::PI;
-    for i in 0..segments {
-        let t0 = start_angle + (end_angle - start_angle) * (i as f32 / segments as f32);
-        let t1 = start_angle + (end_angle - start_angle) * ((i + 1) as f32 / segments as f32);
-        let p0 = egui::pos2(arc_cx + r * t0.cos(), arc_cy - r * t0.sin());
-        let p1 = egui::pos2(arc_cx + r * t1.cos(), arc_cy - r * t1.sin());
-        painter.line_segment([p0, p1], stroke);
-    }
-
-    // Open chevron arrowhead at the left end, pointing left-down
-    let tip_x = arc_cx - r;
-    let tip_y = arc_cy;
-    let ah = s * 0.7;
-    painter.line_segment(
-        [
-            egui::pos2(tip_x + ah * 0.45, tip_y - ah * 0.55),
-            egui::pos2(tip_x - ah * 0.15, tip_y + ah * 0.25),
-        ],
-        stroke,
-    );
-    painter.line_segment(
-        [
-            egui::pos2(tip_x - ah * 0.15, tip_y + ah * 0.25),
-            egui::pos2(tip_x + ah * 0.55, tip_y + ah * 0.55),
-        ],
-        stroke,
-    );
+    let tip = egui::pos2(c.x - s, c.y);
+    let tail = egui::pos2(c.x + s, c.y);
+    let head = s * 0.55;
+    painter.line_segment([tail, tip], stroke);
+    painter.line_segment([egui::pos2(tip.x + head, tip.y - head), tip], stroke);
+    painter.line_segment([egui::pos2(tip.x + head, tip.y + head), tip], stroke);
 }
 
-/// Draw a curved right-pointing arrow (Redo).
+/// Draw a simple right-pointing arrow (Redo).
 pub fn draw_icon_redo(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let c = rect.center();
-    let s = rect.width().min(rect.height()) * 0.30;
+    let s = rect.width().min(rect.height()) * 0.28;
     let stroke = egui::Stroke::new(1.5, color);
 
-    // Mirror of undo: semicircle from left, over the top, to the right
-    let r = s * 0.8;
-    let arc_cx = c.x - s * 0.05;
-    let arc_cy = c.y + s * 0.15;
-    let segments = 10;
-    let start_angle: f32 = 0.0;
-    let end_angle = std::f32::consts::PI;
-    for i in 0..segments {
-        let t0 = start_angle + (end_angle - start_angle) * (i as f32 / segments as f32);
-        let t1 = start_angle + (end_angle - start_angle) * ((i + 1) as f32 / segments as f32);
-        let p0 = egui::pos2(arc_cx - r * t0.cos(), arc_cy - r * t0.sin());
-        let p1 = egui::pos2(arc_cx - r * t1.cos(), arc_cy - r * t1.sin());
-        painter.line_segment([p0, p1], stroke);
-    }
-
-    // Open chevron arrowhead at the right end, pointing right-down
-    let tip_x = arc_cx + r;
-    let tip_y = arc_cy;
-    let ah = s * 0.7;
-    painter.line_segment(
-        [
-            egui::pos2(tip_x - ah * 0.45, tip_y - ah * 0.55),
-            egui::pos2(tip_x + ah * 0.15, tip_y + ah * 0.25),
-        ],
-        stroke,
-    );
-    painter.line_segment(
-        [
-            egui::pos2(tip_x + ah * 0.15, tip_y + ah * 0.25),
-            egui::pos2(tip_x - ah * 0.55, tip_y + ah * 0.55),
-        ],
-        stroke,
-    );
+    let tip = egui::pos2(c.x + s, c.y);
+    let tail = egui::pos2(c.x - s, c.y);
+    let head = s * 0.55;
+    painter.line_segment([tail, tip], stroke);
+    painter.line_segment([egui::pos2(tip.x - head, tip.y - head), tip], stroke);
+    painter.line_segment([egui::pos2(tip.x - head, tip.y + head), tip], stroke);
 }

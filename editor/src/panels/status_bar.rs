@@ -1,5 +1,6 @@
 use eframe::egui;
 
+use crate::panels::MapSizeDialog;
 use crate::panels::Tool;
 use crate::theme::{ThemeColors, theme_colors};
 
@@ -13,12 +14,17 @@ pub enum StatusBarAction {
     SetDimensions(u16, u16),
 }
 
-pub struct StatusBarPanel;
+#[derive(Default)]
+pub struct StatusBarPanel {
+    size_dialog: MapSizeDialog,
+}
 
 impl StatusBarPanel {
     pub fn show(
+        &mut self,
         ctx: &egui::Context,
         map: &map::Map,
+        current_file_label: &str,
         active_tool: Tool,
         hover_tile: (u16, u16),
         zoom: f32,
@@ -86,8 +92,8 @@ impl StatusBarPanel {
 
                         // Dimensions dropdown — "caret | NxN | Size" (RTL order)
                         // Caret triangle (allocated in RTL flow, appears rightmost)
-                        let (caret_rect, _) =
-                            ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                        let (caret_rect, caret_response) =
+                            ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::click());
                         {
                             let cx = caret_rect.center().x;
                             let cy = caret_rect.center().y;
@@ -111,6 +117,13 @@ impl StatusBarPanel {
                             .stroke(egui::Stroke::NONE)
                             .corner_radius(0.0),
                         );
+                        let popup_id = egui::Popup::default_response_id(&dim_response);
+                        if caret_response.clicked() {
+                            egui::Popup::toggle_id(ui.ctx(), popup_id);
+                        }
+                        if caret_response.hovered() {
+                            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                        }
                         ui.label(egui::RichText::new("Size").size(13.0).color(colors.muted));
 
                         let popup_width = dim_response.rect.width().max(120.0);
@@ -145,13 +158,28 @@ impl StatusBarPanel {
                                             );
                                             if btn.clicked() {
                                                 action = StatusBarAction::SetDimensions(w, h);
-                                                egui::Popup::close_id(
-                                                    ui.ctx(),
-                                                    egui::Popup::default_response_id(&dim_response),
-                                                );
+                                                egui::Popup::close_id(ui.ctx(), popup_id);
                                             }
                                         }
                                     });
+
+                                ui.add_space(4.0);
+                                ui.separator();
+                                let custom_btn = ui.add(
+                                    egui::Button::new(
+                                        egui::RichText::new("Custom Size...")
+                                            .size(13.0)
+                                            .color(colors.text),
+                                    )
+                                    .fill(egui::Color32::TRANSPARENT)
+                                    .stroke(egui::Stroke::NONE)
+                                    .min_size(egui::vec2(ui.available_width(), 24.0))
+                                    .corner_radius(4.0),
+                                );
+                                if custom_btn.clicked() {
+                                    self.size_dialog.open(map.width, map.height);
+                                    egui::Popup::close_id(ui.ctx(), popup_id);
+                                }
                             });
 
                         Self::separator(ui, &colors);
@@ -169,9 +197,27 @@ impl StatusBarPanel {
                         }
 
                         Self::separator(ui, &colors);
+
+                        ui.label(
+                            egui::RichText::new(current_file_label)
+                                .size(13.0)
+                                .color(colors.muted),
+                        );
+
+                        Self::separator(ui, &colors);
                     });
                 });
             });
+
+        if let Some((width, height)) = self.size_dialog.show(
+            ctx,
+            "status_custom_size_dialog",
+            "Custom Size",
+            "Apply",
+            Some(map),
+        ) {
+            action = StatusBarAction::SetDimensions(width, height);
+        }
 
         action
     }

@@ -179,7 +179,7 @@ fn dedup_points(points: Vec<(i32, i32)>) -> Vec<(i32, i32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{outline_points, ShapeKind};
+    use super::{ShapeKind, outline_points};
 
     #[test]
     fn rect_contains_expected_corners() {
