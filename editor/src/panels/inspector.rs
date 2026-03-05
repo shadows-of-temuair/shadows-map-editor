@@ -268,7 +268,7 @@ impl InspectorPanel {
         ui.add_space(10.0);
     }
 
-    /// Render a minimap showing painted ground and solid (impassable) boundaries.
+    /// Render a minimap showing only solid (impassable) boundaries.
     fn draw_tab_map(ui: &mut egui::Ui, colors: &ThemeColors, map: &map::Map, sotp: Option<&[u8]>) {
         let w = map.width as usize;
         let h = map.height as usize;
@@ -299,23 +299,12 @@ impl InspectorPanel {
         let origin_y = rect.top();
 
         let painter = ui.painter();
-        let ground_fill = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10);
-        let ground_edge = egui::Stroke::new(
-            1.0,
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 36),
-        );
         let solid_fill = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 20);
         let solid_edge = egui::Stroke::new(
             1.0,
             egui::Color32::from_rgba_unmultiplied(255, 255, 255, 120),
         );
 
-        let has_ground = |col: i32, row: i32| -> bool {
-            if col < 0 || col >= w as i32 || row < 0 || row >= h as i32 {
-                return false;
-            }
-            map.tiles[row as usize * w + col as usize].ground != 0
-        };
         let is_solid = |col: i32, row: i32| -> bool {
             if col < 0 || col >= w as i32 || row < 0 || row >= h as i32 {
                 return false;
@@ -326,9 +315,8 @@ impl InspectorPanel {
         for row in 0..h {
             for col in 0..w {
                 let idx = row * w + col;
-                let ground = map.tiles[idx].ground != 0;
                 let solid_here = solid[idx];
-                if !ground && !solid_here {
+                if !solid_here {
                     continue;
                 }
 
@@ -341,36 +329,14 @@ impl InspectorPanel {
                 let left = egui::pos2(cx - hw, cy + hh);
                 let poly = vec![top, right, bottom, left];
 
-                if ground {
-                    painter.add(egui::Shape::convex_polygon(
-                        poly.clone(),
-                        ground_fill,
-                        egui::Stroke::NONE,
-                    ));
-                }
-                if solid_here {
-                    painter.add(egui::Shape::convex_polygon(
-                        poly,
-                        solid_fill,
-                        egui::Stroke::NONE,
-                    ));
-                }
+                painter.add(egui::Shape::convex_polygon(
+                    poly,
+                    solid_fill,
+                    egui::Stroke::NONE,
+                ));
 
                 let c = col as i32;
                 let r = row as i32;
-
-                if ground && !has_ground(c, r - 1) {
-                    painter.line_segment([top, right], ground_edge);
-                }
-                if ground && !has_ground(c + 1, r) {
-                    painter.line_segment([right, bottom], ground_edge);
-                }
-                if ground && !has_ground(c, r + 1) {
-                    painter.line_segment([bottom, left], ground_edge);
-                }
-                if ground && !has_ground(c - 1, r) {
-                    painter.line_segment([left, top], ground_edge);
-                }
 
                 if solid_here && !is_solid(c, r - 1) {
                     painter.line_segment([top, right], solid_edge);
