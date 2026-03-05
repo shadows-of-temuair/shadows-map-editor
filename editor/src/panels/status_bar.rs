@@ -63,7 +63,11 @@ impl StatusBarPanel {
                     Self::separator(ui, &colors);
 
                     // Status (left, accent)
-                    ui.label(egui::RichText::new(status_message).size(13.0).color(colors.accent));
+                    ui.label(
+                        egui::RichText::new(status_message)
+                            .size(13.0)
+                            .color(colors.accent),
+                    );
 
                     // Right-aligned section
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -82,10 +86,8 @@ impl StatusBarPanel {
 
                         // Dimensions dropdown — "caret | NxN | Size" (RTL order)
                         // Caret triangle (allocated in RTL flow, appears rightmost)
-                        let (caret_rect, _) = ui.allocate_exact_size(
-                            egui::vec2(14.0, 14.0),
-                            egui::Sense::hover(),
-                        );
+                        let (caret_rect, _) =
+                            ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
                         {
                             let cx = caret_rect.center().x;
                             let cy = caret_rect.center().y;
@@ -109,9 +111,7 @@ impl StatusBarPanel {
                             .stroke(egui::Stroke::NONE)
                             .corner_radius(0.0),
                         );
-                        ui.label(
-                            egui::RichText::new("Size").size(13.0).color(colors.muted),
-                        );
+                        ui.label(egui::RichText::new("Size").size(13.0).color(colors.muted));
 
                         let popup_width = dim_response.rect.width().max(120.0);
                         egui::Popup::from_toggle_button_response(&dim_response)
@@ -125,8 +125,7 @@ impl StatusBarPanel {
                                     .max_height(200.0)
                                     .show(ui, |ui| {
                                         for (w, h) in dims {
-                                            let is_current =
-                                                w == map.width && h == map.height;
+                                            let is_current = w == map.width && h == map.height;
                                             let label = format!("{}x{}", w, h);
                                             let text_color = if is_current {
                                                 colors.accent
@@ -141,20 +140,14 @@ impl StatusBarPanel {
                                                 )
                                                 .fill(egui::Color32::TRANSPARENT)
                                                 .stroke(egui::Stroke::NONE)
-                                                .min_size(egui::vec2(
-                                                    ui.available_width(),
-                                                    24.0,
-                                                ))
+                                                .min_size(egui::vec2(ui.available_width(), 24.0))
                                                 .corner_radius(4.0),
                                             );
                                             if btn.clicked() {
-                                                action =
-                                                    StatusBarAction::SetDimensions(w, h);
+                                                action = StatusBarAction::SetDimensions(w, h);
                                                 egui::Popup::close_id(
                                                     ui.ctx(),
-                                                    egui::Popup::default_response_id(
-                                                        &dim_response,
-                                                    ),
+                                                    egui::Popup::default_response_id(&dim_response),
                                                 );
                                             }
                                         }
@@ -168,11 +161,8 @@ impl StatusBarPanel {
                             action = StatusBarAction::ZoomIn;
                         }
 
-                        let zoom_text =
-                            format!("Zoom {}%", (zoom * 100.0).round() as i32);
-                        ui.label(
-                            egui::RichText::new(zoom_text).size(13.0).color(colors.text),
-                        );
+                        let zoom_text = format!("Zoom {}%", (zoom * 100.0).round() as i32);
+                        ui.label(egui::RichText::new(zoom_text).size(13.0).color(colors.text));
 
                         if Self::zoom_button(ui, "-", &colors, "Zoom out (Cmd+Minus)") {
                             action = StatusBarAction::ZoomOut;

@@ -1,7 +1,7 @@
 use std::fmt;
 
-use crate::hpf::HpfSprite;
 use crate::Palette;
+use crate::hpf::HpfSprite;
 
 /// Maximum atlas dimension in pixels. Chosen to fit within common GPU limits.
 const MAX_ATLAS_SIDE: u32 = 8192;
@@ -80,9 +80,9 @@ impl SpriteAtlas {
 
         // Minimum columns needed: total_height / max_height, with 10% headroom
         // for imperfect bin packing.
-        let min_columns =
-            ((total_height * 11 / 10 + MAX_ATLAS_SIDE as u64 - 1) / MAX_ATLAS_SIDE as u64)
-                .max(1) as u32;
+        let min_columns = ((total_height * 11 / 10 + MAX_ATLAS_SIDE as u64 - 1)
+            / MAX_ATLAS_SIDE as u64)
+            .max(1) as u32;
         // Also cap width at MAX_ATLAS_SIDE
         let max_columns = MAX_ATLAS_SIDE / sprite_width;
         let columns = min_columns.max(1).min(max_columns).min(real_count as u32);

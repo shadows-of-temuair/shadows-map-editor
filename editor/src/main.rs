@@ -8,6 +8,7 @@ mod document;
 pub mod export;
 mod palette_lookup;
 mod panels;
+mod shape;
 mod theme;
 mod widgets;
 

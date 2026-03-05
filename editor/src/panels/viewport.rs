@@ -2,7 +2,8 @@ use eframe::egui;
 
 use super::toolbar::Tool;
 use crate::document::{Camera, LayerVisibility};
-use crate::theme::{theme_colors, ThemeColors};
+use crate::shape::{self, ShapeKind};
+use crate::theme::{ThemeColors, theme_colors};
 
 /// Returns true if a wall tile ID should be rendered.
 ///
@@ -20,10 +21,20 @@ fn is_rendered_wall(id: u16) -> bool {
 pub struct ViewportResult {
     pub hover_tile: Option<(u16, u16)>,
     pub clicked_tile: Option<(u16, u16)>,
-    pub painted_tile: Option<(u16, u16)>,
+    pub painted_tile: Option<(u16, u16, u16)>,
+    pub fill_clicked_tile: Option<(u16, u16, u16)>,
     pub pencil_clicked_tile: Option<(u16, u16)>,
     pub pencil_shift_clicked_tile: Option<(u16, u16)>,
     pub line_clicked_tile: Option<(u16, u16)>,
+    pub shape_clicked_tile: Option<(u16, u16)>,
+    pub eyedropper_pick: Option<EyedropperPick>,
+}
+
+#[derive(Clone, Copy)]
+pub enum EyedropperPick {
+    Ground(u16),
+    LeftWall(u16),
+    RightWall(u16),
 }
 
 pub struct ViewportPanel;
@@ -34,8 +45,10 @@ impl ViewportPanel {
         map: &map::Map,
         camera: &mut Camera,
         active_tool: Tool,
+        active_shape: ShapeKind,
         selected_ground_tile: u16,
         line_preview_start: Option<(u16, u16)>,
+        shape_preview_start: Option<(u16, u16)>,
         tile_atlas: Option<&render::TileAtlas>,
         atlas_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
@@ -68,14 +81,17 @@ impl ViewportPanel {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                 }
 
-                // Mouse wheel zoom
-                let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-                if scroll != 0.0 {
-                    let old_zoom = camera.zoom;
-                    let steps = (scroll / 40.0).round();
-                    camera.zoom = (camera.zoom + steps * 0.05).clamp(0.25, 4.0);
-                    // Scale offset to keep viewport center at the same map point
-                    camera.offset *= camera.zoom / old_zoom;
+                // Mouse wheel zoom (only when the viewport is hovered).
+                // This prevents map zoom from triggering while scrolling side panels.
+                if response.hovered() {
+                    let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                    if scroll != 0.0 {
+                        let old_zoom = camera.zoom;
+                        let steps = (scroll / 40.0).round();
+                        camera.zoom = (camera.zoom + steps * 0.05).clamp(0.25, 4.0);
+                        // Scale offset to keep viewport center at the same map point
+                        camera.offset *= camera.zoom / old_zoom;
+                    }
                 }
 
                 // Arrow key panning (uses OS key repeat)
@@ -160,7 +176,8 @@ impl ViewportPanel {
                                             i.pointer.button_down(egui::PointerButton::Primary)
                                         });
                                     if is_primary_painting && !shift_held {
-                                        result.painted_tile = Some((col, row));
+                                        result.painted_tile =
+                                            Some((col, row, selected_ground_tile));
                                     }
                                 }
                                 Tool::Line if selected_ground_tile != 0 => {
@@ -193,6 +210,95 @@ impl ViewportPanel {
                                     if response.clicked_by(egui::PointerButton::Primary) {
                                         result.line_clicked_tile = Some((col, row));
                                         result.clicked_tile = Some((col, row));
+                                    }
+                                }
+                                Tool::Shape if selected_ground_tile != 0 => {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                                    if let Some(start) = shape_preview_start {
+                                        Self::draw_ground_shape_preview(
+                                            &painter,
+                                            map,
+                                            active_shape,
+                                            start,
+                                            (col, row),
+                                            origin,
+                                            half_w,
+                                            half_h,
+                                            tile_atlas,
+                                            atlas_texture,
+                                            selected_ground_tile,
+                                        );
+                                    } else {
+                                        Self::draw_ground_preview(
+                                            &painter,
+                                            col,
+                                            row,
+                                            origin,
+                                            half_w,
+                                            half_h,
+                                            tile_atlas,
+                                            atlas_texture,
+                                            selected_ground_tile,
+                                        );
+                                    }
+                                    if response.clicked_by(egui::PointerButton::Primary) {
+                                        result.shape_clicked_tile = Some((col, row));
+                                        result.clicked_tile = Some((col, row));
+                                    }
+                                }
+                                Tool::Fill if selected_ground_tile != 0 => {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                                    Self::draw_ground_preview(
+                                        &painter,
+                                        col,
+                                        row,
+                                        origin,
+                                        half_w,
+                                        half_h,
+                                        tile_atlas,
+                                        atlas_texture,
+                                        selected_ground_tile,
+                                    );
+                                    if response.clicked_by(egui::PointerButton::Primary) {
+                                        result.fill_clicked_tile =
+                                            Some((col, row, selected_ground_tile));
+                                        result.clicked_tile = Some((col, row));
+                                    }
+                                }
+                                Tool::Eyedropper => {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                                    let idx = row as usize * map.width as usize + col as usize;
+                                    let tile = &map.tiles[idx];
+                                    let shift_held = ui.input(|i| i.modifiers.shift);
+
+                                    if response.clicked_by(egui::PointerButton::Primary) {
+                                        let pick = if shift_held {
+                                            let cx = origin.x + (col as f32 - row as f32) * half_w;
+                                            let prefer_left = pointer_pos.x <= cx;
+                                            Self::pick_wall(tile, prefer_left).or_else(|| {
+                                                (tile.ground != 0)
+                                                    .then_some(EyedropperPick::Ground(tile.ground))
+                                            })
+                                        } else {
+                                            (tile.ground != 0)
+                                                .then_some(EyedropperPick::Ground(tile.ground))
+                                        };
+
+                                        result.eyedropper_pick = pick;
+                                        result.clicked_tile = Some((col, row));
+                                    }
+                                }
+                                Tool::Eraser => {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                                    Self::draw_erase_preview(
+                                        &painter, col, row, origin, half_w, half_h,
+                                    );
+                                    let is_primary_painting = response.is_pointer_button_down_on()
+                                        && ui.input(|i| {
+                                            i.pointer.button_down(egui::PointerButton::Primary)
+                                        });
+                                    if is_primary_painting {
+                                        result.painted_tile = Some((col, row, 0));
                                     }
                                 }
                                 _ => {
@@ -669,6 +775,82 @@ impl ViewportPanel {
             egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180),
         );
         painter.add(egui::Shape::mesh(mesh));
+    }
+
+    fn draw_erase_preview(
+        painter: &egui::Painter,
+        col: u16,
+        row: u16,
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+    ) {
+        let cx = origin.x + (col as f32 - row as f32) * half_w;
+        let cy = origin.y + (col as f32 + row as f32) * half_h;
+
+        let top = egui::pos2(cx, cy);
+        let right = egui::pos2(cx + half_w, cy + half_h);
+        let bottom = egui::pos2(cx, cy + half_h * 2.0);
+        let left = egui::pos2(cx - half_w, cy + half_h);
+
+        painter.add(egui::Shape::convex_polygon(
+            vec![top, right, bottom, left],
+            egui::Color32::from_rgba_unmultiplied(0, 0, 0, 90),
+            egui::Stroke::NONE,
+        ));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_ground_shape_preview(
+        painter: &egui::Painter,
+        map: &map::Map,
+        shape_kind: ShapeKind,
+        start: (u16, u16),
+        end: (u16, u16),
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+        tile_atlas: Option<&render::TileAtlas>,
+        tile_texture: Option<&egui::TextureHandle>,
+        selected_ground_tile: u16,
+    ) {
+        let points = shape::outline_points(shape_kind, start, end);
+        for (x, y) in points {
+            if x < 0 || y < 0 {
+                continue;
+            }
+            let (x, y) = (x as u16, y as u16);
+            if x >= map.width || y >= map.height {
+                continue;
+            }
+            Self::draw_ground_preview(
+                painter,
+                x,
+                y,
+                origin,
+                half_w,
+                half_h,
+                tile_atlas,
+                tile_texture,
+                selected_ground_tile,
+            );
+        }
+    }
+
+    fn pick_wall(tile: &map::Tile, prefer_left: bool) -> Option<EyedropperPick> {
+        let left = tile.left_wall;
+        let right = tile.right_wall;
+
+        match (left != 0, right != 0) {
+            (true, true) => Some(if prefer_left {
+                EyedropperPick::LeftWall(left)
+            } else {
+                EyedropperPick::RightWall(right)
+            }),
+            (true, false) => Some(EyedropperPick::LeftWall(left)),
+            (false, true) => Some(EyedropperPick::RightWall(right)),
+            (false, false) => None,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -14,7 +14,13 @@ fn main() {
     let border_width = 8.0;
 
     fn sdf_rounded_rect(
-        px: f32, py: f32, cx: f32, cy: f32, half_w: f32, half_h: f32, r: f32,
+        px: f32,
+        py: f32,
+        cx: f32,
+        cy: f32,
+        half_w: f32,
+        half_h: f32,
+        r: f32,
     ) -> f32 {
         let dx = (px - cx).abs() - half_w + r;
         let dy = (py - cy).abs() - half_h + r;
@@ -34,7 +40,8 @@ fn main() {
             let py = y as f32 + 0.5;
             let idx = ((y * size + x) * 4) as usize;
 
-            let d_outer = sdf_rounded_rect(px, py, center, center, half_ext, half_ext, corner_radius);
+            let d_outer =
+                sdf_rounded_rect(px, py, center, center, half_ext, half_ext, corner_radius);
             let d_inner = sdf_rounded_rect(px, py, center, center, inner_half, inner_half, inner_r);
 
             if d_outer > 1.0 {
@@ -73,9 +80,15 @@ fn main() {
                 // Bevel on border: lighter top edge, darker bottom
                 let vert_t = (py - margin) / (size as f32 - margin * 2.0);
                 let bevel_mult = 1.0 + (0.5 - vert_t) * 0.5; // >1 at top, <1 at bottom
-                let r = ((border_color[0] as f32 * bevel_mult) * border_alpha + 14.0 * (1.0 - border_alpha)).min(255.0) as u8;
-                let g = ((border_color[1] as f32 * bevel_mult) * border_alpha + 15.0 * (1.0 - border_alpha)).min(255.0) as u8;
-                let b = ((border_color[2] as f32 * bevel_mult) * border_alpha + 17.0 * (1.0 - border_alpha)).min(255.0) as u8;
+                let r = ((border_color[0] as f32 * bevel_mult) * border_alpha
+                    + 14.0 * (1.0 - border_alpha))
+                    .min(255.0) as u8;
+                let g = ((border_color[1] as f32 * bevel_mult) * border_alpha
+                    + 15.0 * (1.0 - border_alpha))
+                    .min(255.0) as u8;
+                let b = ((border_color[2] as f32 * bevel_mult) * border_alpha
+                    + 17.0 * (1.0 - border_alpha))
+                    .min(255.0) as u8;
                 pixels[idx] = r;
                 pixels[idx + 1] = g;
                 pixels[idx + 2] = b;
@@ -224,9 +237,10 @@ fn main() {
                             for c in 0..3 {
                                 let src = accent[c] / 255.0;
                                 let dst = pixels[idx + c] as f32 / 255.0;
-                                pixels[idx + c] =
-                                    ((src * src_a + dst * existing_a * (1.0 - src_a)) * inv * 255.0)
-                                        as u8;
+                                pixels[idx + c] = ((src * src_a + dst * existing_a * (1.0 - src_a))
+                                    * inv
+                                    * 255.0)
+                                    as u8;
                             }
                             pixels[idx + 3] = (out_a * 255.0) as u8;
                         }

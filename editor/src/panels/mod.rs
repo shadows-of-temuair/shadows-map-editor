@@ -13,5 +13,5 @@ pub use status_bar::{StatusBarAction, StatusBarPanel};
 pub use tab_bar::{TabBarAction, TabBarPanel};
 pub use title_bar::TitleBarPanel;
 pub use toolbar::{Tool, ToolbarAction, ToolbarPanel};
-pub use viewport::ViewportPanel;
+pub use viewport::{EyedropperPick, ViewportPanel};
 pub use window_frame::WindowFrame;

@@ -232,9 +232,9 @@ fn blit_scaled(
                 continue;
             }
 
-            let src_idx =
-                ((src_y + sy_local) as usize * src_buf_w as usize + (src_x + sx_local) as usize)
-                    * 4;
+            let src_idx = ((src_y + sy_local) as usize * src_buf_w as usize
+                + (src_x + sx_local) as usize)
+                * 4;
             if src_idx + 3 >= src_buf.len() {
                 continue;
             }
@@ -254,16 +254,14 @@ fn blit_scaled(
             } else {
                 let inv_sa = 255 - sa;
                 dst_buf[dst_idx] =
-                    ((src_buf[src_idx] as u32 * sa + dst_buf[dst_idx] as u32 * inv_sa) / 255)
-                        as u8;
+                    ((src_buf[src_idx] as u32 * sa + dst_buf[dst_idx] as u32 * inv_sa) / 255) as u8;
                 dst_buf[dst_idx + 1] = ((src_buf[src_idx + 1] as u32 * sa
                     + dst_buf[dst_idx + 1] as u32 * inv_sa)
                     / 255) as u8;
                 dst_buf[dst_idx + 2] = ((src_buf[src_idx + 2] as u32 * sa
                     + dst_buf[dst_idx + 2] as u32 * inv_sa)
                     / 255) as u8;
-                dst_buf[dst_idx + 3] =
-                    (sa + dst_buf[dst_idx + 3] as u32 * inv_sa / 255) as u8;
+                dst_buf[dst_idx + 3] = (sa + dst_buf[dst_idx + 3] as u32 * inv_sa / 255) as u8;
             }
         }
     }
@@ -416,16 +414,52 @@ pub fn export_tab_map_png(
             let r = row as i32;
 
             if !is_solid(c, r - 1) {
-                draw_line(&mut buffer, out_w, out_h, cx, cy, cx + hw, cy + hh, edge_color);
+                draw_line(
+                    &mut buffer,
+                    out_w,
+                    out_h,
+                    cx,
+                    cy,
+                    cx + hw,
+                    cy + hh,
+                    edge_color,
+                );
             }
             if !is_solid(c + 1, r) {
-                draw_line(&mut buffer, out_w, out_h, cx + hw, cy + hh, cx, cy + 2.0 * hh, edge_color);
+                draw_line(
+                    &mut buffer,
+                    out_w,
+                    out_h,
+                    cx + hw,
+                    cy + hh,
+                    cx,
+                    cy + 2.0 * hh,
+                    edge_color,
+                );
             }
             if !is_solid(c, r + 1) {
-                draw_line(&mut buffer, out_w, out_h, cx, cy + 2.0 * hh, cx - hw, cy + hh, edge_color);
+                draw_line(
+                    &mut buffer,
+                    out_w,
+                    out_h,
+                    cx,
+                    cy + 2.0 * hh,
+                    cx - hw,
+                    cy + hh,
+                    edge_color,
+                );
             }
             if !is_solid(c - 1, r) {
-                draw_line(&mut buffer, out_w, out_h, cx - hw, cy + hh, cx, cy, edge_color);
+                draw_line(
+                    &mut buffer,
+                    out_w,
+                    out_h,
+                    cx - hw,
+                    cy + hh,
+                    cx,
+                    cy,
+                    edge_color,
+                );
             }
         }
     }

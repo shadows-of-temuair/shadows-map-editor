@@ -149,21 +149,12 @@ impl ExportDialog {
                 ui.add_space(4.0);
 
                 // --- Scale ---
-                Self::scale_row(
-                    ui,
-                    &colors,
-                    &mut self.scale_percent,
-                );
+                Self::scale_row(ui, &colors, &mut self.scale_percent);
 
                 ui.add_space(4.0);
 
                 // --- Background color ---
-                Self::background_row(
-                    ui,
-                    &colors,
-                    &mut self.bg_enabled,
-                    &mut self.bg_color,
-                );
+                Self::background_row(ui, &colors, &mut self.bg_enabled, &mut self.bg_color);
 
                 ui.add_space(4.0);
 
@@ -201,11 +192,7 @@ impl ExportDialog {
                     ui.add_space(4.0);
 
                     // Tab map scale (same layout as map scale, no indent)
-                    Self::scale_row(
-                        ui,
-                        &colors,
-                        &mut self.tab_map_scale_percent,
-                    );
+                    Self::scale_row(ui, &colors, &mut self.tab_map_scale_percent);
 
                     ui.add_space(4.0);
 
@@ -221,15 +208,11 @@ impl ExportDialog {
 
                     // Tab map output dimensions
                     let tm_zoom = self.tab_map_scale_percent as f32 / 100.0;
-                    let (tm_w, tm_h) =
-                        crate::export::compute_tab_map_dimensions(map, tm_zoom);
+                    let (tm_w, tm_h) = crate::export::compute_tab_map_dimensions(map, tm_zoom);
                     ui.label(
-                        egui::RichText::new(format!(
-                            "Tab map: {} \u{00D7} {} px",
-                            tm_w, tm_h
-                        ))
-                        .size(12.0)
-                        .color(colors.muted),
+                        egui::RichText::new(format!("Tab map: {} \u{00D7} {} px", tm_w, tm_h))
+                            .size(12.0)
+                            .color(colors.muted),
                     );
                 }
 
@@ -290,9 +273,7 @@ impl ExportDialog {
 
                         let cancel_btn = ui.add(
                             egui::Button::new(
-                                egui::RichText::new("Cancel")
-                                    .size(14.0)
-                                    .color(colors.text),
+                                egui::RichText::new("Cancel").size(14.0).color(colors.text),
                             )
                             .fill(colors.bg_3)
                             .stroke(egui::Stroke::new(1.0, colors.border))
@@ -313,26 +294,14 @@ impl ExportDialog {
 
     /// Muted field label.
     fn field_label(ui: &mut egui::Ui, colors: &ThemeColors, text: &str) {
-        ui.label(
-            egui::RichText::new(text)
-                .size(13.0)
-                .color(colors.muted),
-        );
+        ui.label(egui::RichText::new(text).size(13.0).color(colors.muted));
     }
 
     /// "Scale" label + slider + percentage on one row.
-    fn scale_row(
-        ui: &mut egui::Ui,
-        colors: &ThemeColors,
-        scale_percent: &mut u32,
-    ) {
+    fn scale_row(ui: &mut egui::Ui, colors: &ThemeColors, scale_percent: &mut u32) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
-            ui.label(
-                egui::RichText::new("Scale")
-                    .size(13.0)
-                    .color(colors.muted),
-            );
+            ui.label(egui::RichText::new("Scale").size(13.0).color(colors.muted));
             let mut slot = (*scale_percent / 25) as i32;
             let slider_w = ui.available_width() - 50.0;
             let slider = egui::Slider::new(&mut slot, 1..=16)
@@ -381,10 +350,8 @@ impl ExportDialog {
 
     /// Full-width horizontal separator line.
     fn separator(ui: &mut egui::Ui, colors: &ThemeColors) {
-        let (rect, _) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), 1.0),
-            egui::Sense::hover(),
-        );
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
         ui.painter().rect_filled(rect, 0.0, colors.border);
     }
 }

@@ -169,10 +169,6 @@ impl MapDocument {
     }
 
     pub fn begin_ground_stroke(&mut self, paint_value: u16) {
-        if paint_value == 0 {
-            return;
-        }
-
         match self.pending_ground_stroke.as_ref() {
             Some(stroke) if stroke.paint_value == paint_value => {}
             Some(_) => {
@@ -192,7 +188,7 @@ impl MapDocument {
     }
 
     pub fn paint_ground_stroke_tile(&mut self, col: u16, row: u16, paint_value: u16) -> bool {
-        if paint_value == 0 || col >= self.map.width || row >= self.map.height {
+        if col >= self.map.width || row >= self.map.height {
             return false;
         }
 

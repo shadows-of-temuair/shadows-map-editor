@@ -263,10 +263,39 @@ pub fn draw_icon_eyedropper(painter: &egui::Painter, rect: egui::Rect, color: eg
 /// Draw a rectangle outline (Rectangle tool).
 pub fn draw_icon_rectangle(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let c = rect.center();
-    let s = rect.width().min(rect.height()) * 0.26;
+    let s = rect.width().min(rect.height()) * 0.30;
     let stroke = egui::Stroke::new(1.5, color);
     let inner = egui::Rect::from_center_size(c, egui::vec2(s * 2.0, s * 1.6));
     painter.rect_stroke(inner, 0.0, stroke, egui::StrokeKind::Inside);
+}
+
+/// Draw a square outline (Square shape tool).
+pub fn draw_icon_square(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    let s = rect.width().min(rect.height()) * 0.28;
+    let stroke = egui::Stroke::new(1.5, color);
+    let inner = egui::Rect::from_center_size(c, egui::vec2(s * 2.0, s * 2.0));
+    painter.rect_stroke(inner, 0.0, stroke, egui::StrokeKind::Inside);
+}
+
+/// Draw a circle outline (Circle shape tool).
+pub fn draw_icon_circle(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    let r = rect.width().min(rect.height()) * 0.28;
+    painter.circle_stroke(c, r, egui::Stroke::new(1.5, color));
+}
+
+/// Draw an upright triangle outline (Triangle shape tool).
+pub fn draw_icon_triangle(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    let s = rect.width().min(rect.height()) * 0.34;
+    let stroke = egui::Stroke::new(1.5, color);
+    let top = egui::pos2(c.x, c.y - s * 0.85);
+    let left = egui::pos2(c.x - s, c.y + s * 0.75);
+    let right = egui::pos2(c.x + s, c.y + s * 0.75);
+    painter.line_segment([top, left], stroke);
+    painter.line_segment([left, right], stroke);
+    painter.line_segment([right, top], stroke);
 }
 
 /// Draw a simple diagonal segment with endpoints (Line tool).
