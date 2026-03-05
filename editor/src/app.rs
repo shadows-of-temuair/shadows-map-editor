@@ -36,6 +36,8 @@ pub struct EditorApp {
     selected_tile: Option<(u16, u16)>,
     selected_ground_tile: u16,
     selected_wall_tile: u16,
+    reveal_ground_tile_in_palette: Option<u16>,
+    reveal_wall_tile_in_palette: Option<u16>,
     last_pencil_click_tile: Option<(u16, u16)>,
     line_tool_start_tile: Option<(u16, u16)>,
     shape_tool_start_tile: Option<(u16, u16)>,
@@ -56,6 +58,14 @@ impl EditorApp {
         let (tile_atlas, wall_atlas, sotp_data) = Self::load_assets();
         let map_list = MapList::load_if_exists("maps.ron");
         let selected_ground_tile = if tile_atlas.is_some() { 1 } else { 0 };
+        let selected_wall_tile = wall_atlas
+            .as_ref()
+            .and_then(|atlas| {
+                (1..atlas.sprite_count())
+                    .find(|&id| atlas.sprite_rect(id).is_some())
+                    .map(|id| id.min(u16::MAX as u32) as u16)
+            })
+            .unwrap_or(0);
 
         Self {
             documents: vec![MapDocument::new(50, 50)],
@@ -80,7 +90,9 @@ impl EditorApp {
             hover_tile: (0, 0),
             selected_tile: None,
             selected_ground_tile,
-            selected_wall_tile: 0,
+            selected_wall_tile,
+            reveal_ground_tile_in_palette: None,
+            reveal_wall_tile_in_palette: None,
             last_pencil_click_tile: None,
             line_tool_start_tile: None,
             shape_tool_start_tile: None,
@@ -1183,6 +1195,8 @@ impl eframe::App for EditorApp {
                 &mut requested,
                 &mut self.selected_ground_tile,
                 &mut self.selected_wall_tile,
+                &mut self.reveal_ground_tile_in_palette,
+                &mut self.reveal_wall_tile_in_palette,
             );
             requested
         };
@@ -1229,17 +1243,26 @@ impl eframe::App for EditorApp {
             match pick {
                 EyedropperPick::Ground(tile_id) => {
                     self.selected_ground_tile = tile_id;
+                    if tile_id != 0 {
+                        self.reveal_ground_tile_in_palette = Some(tile_id);
+                    }
                     self.set_active_paint_layer(PaintLayer::Ground);
                     self.status_message = format!("Picked ground tile #{}.", tile_id);
                 }
                 EyedropperPick::LeftWall(tile_id) => {
                     self.selected_wall_tile = tile_id;
+                    if tile_id != 0 {
+                        self.reveal_wall_tile_in_palette = Some(tile_id);
+                    }
                     self.set_active_paint_layer(PaintLayer::LeftWall);
                     self.status_message =
                         format!("Picked wall #{} (left).", self.selected_wall_tile);
                 }
                 EyedropperPick::RightWall(tile_id) => {
                     self.selected_wall_tile = tile_id;
+                    if tile_id != 0 {
+                        self.reveal_wall_tile_in_palette = Some(tile_id);
+                    }
                     self.set_active_paint_layer(PaintLayer::RightWall);
                     self.status_message =
                         format!("Picked wall #{} (right).", self.selected_wall_tile);

@@ -186,11 +186,8 @@ impl MapDocument {
             return Err("Width and height must both be at least 1.".to_string());
         }
 
-        let old_width = self.map.width as usize;
-        let old_height = self.map.height as usize;
-        let new_width = width as usize;
-        let new_height = height as usize;
-        let new_count = new_width * new_height;
+        let old_count = self.map.tiles.len();
+        let new_count = width as usize * height as usize;
 
         let mut new_tiles = Vec::new();
         if let Err(err) = new_tiles.try_reserve_exact(new_count) {
@@ -201,14 +198,10 @@ impl MapDocument {
         }
         new_tiles.resize(new_count, map::Tile::default());
 
-        let copy_w = old_width.min(new_width);
-        let copy_h = old_height.min(new_height);
-        for row in 0..copy_h {
-            let old_start = row * old_width;
-            let new_start = row * new_width;
-            new_tiles[new_start..new_start + copy_w]
-                .copy_from_slice(&self.map.tiles[old_start..old_start + copy_w]);
-        }
+        // Preserve tile data in linear order; changing dimensions only changes
+        // how `(col,row)` indices map onto the same flat buffer.
+        let copy_count = old_count.min(new_count);
+        new_tiles[..copy_count].copy_from_slice(&self.map.tiles[..copy_count]);
 
         self.map.width = width;
         self.map.height = height;
@@ -379,7 +372,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resize_grows_and_preserves_existing_tiles() {
+    fn resize_grows_and_preserves_linear_prefix() {
         let mut doc = MapDocument::new(2, 2);
         doc.map.tiles[0].ground = 10;
         doc.map.tiles[1].ground = 11;
@@ -393,13 +386,13 @@ mod tests {
         assert_eq!(doc.map.tiles.len(), 9);
         assert_eq!(doc.map.tiles[0].ground, 10);
         assert_eq!(doc.map.tiles[1].ground, 11);
-        assert_eq!(doc.map.tiles[3].ground, 12);
-        assert_eq!(doc.map.tiles[4].ground, 13);
+        assert_eq!(doc.map.tiles[2].ground, 12);
+        assert_eq!(doc.map.tiles[3].ground, 13);
         assert_eq!(doc.map.tiles[8].ground, 0);
     }
 
     #[test]
-    fn resize_shrinks_and_keeps_top_left_region() {
+    fn resize_shrinks_and_truncates_from_end() {
         let mut doc = MapDocument::new(3, 2);
         for (idx, tile) in doc.map.tiles.iter_mut().enumerate() {
             tile.ground = idx as u16 + 1;
@@ -412,8 +405,50 @@ mod tests {
         assert_eq!(doc.map.tiles.len(), 4);
         assert_eq!(doc.map.tiles[0].ground, 1);
         assert_eq!(doc.map.tiles[1].ground, 2);
-        assert_eq!(doc.map.tiles[2].ground, 4);
-        assert_eq!(doc.map.tiles[3].ground, 5);
+        assert_eq!(doc.map.tiles[2].ground, 3);
+        assert_eq!(doc.map.tiles[3].ground, 4);
+    }
+
+    #[test]
+    fn resize_same_tile_count_preserves_all_tiles() {
+        let mut doc = MapDocument::new(20, 20);
+        for (idx, tile) in doc.map.tiles.iter_mut().enumerate() {
+            let id = idx as u16 + 1;
+            tile.ground = id;
+            tile.left_wall = id + 1000;
+            tile.right_wall = id + 2000;
+        }
+
+        doc.set_dimensions(5, 80).unwrap();
+
+        assert_eq!(doc.map.width, 5);
+        assert_eq!(doc.map.height, 80);
+        assert_eq!(doc.map.tiles.len(), 400);
+        for (idx, tile) in doc.map.tiles.iter().enumerate() {
+            let id = idx as u16 + 1;
+            assert_eq!(tile.ground, id);
+            assert_eq!(tile.left_wall, id + 1000);
+            assert_eq!(tile.right_wall, id + 2000);
+        }
+    }
+
+    #[test]
+    fn resize_shrink_then_regrow_keeps_truncated_prefix() {
+        let mut doc = MapDocument::new(20, 20);
+        for (idx, tile) in doc.map.tiles.iter_mut().enumerate() {
+            tile.ground = idx as u16 + 1;
+        }
+
+        doc.set_dimensions(15, 5).unwrap();
+        doc.set_dimensions(5, 80).unwrap();
+
+        assert_eq!(doc.map.tiles.len(), 400);
+        for idx in 0..75 {
+            assert_eq!(doc.map.tiles[idx].ground, idx as u16 + 1);
+        }
+        for idx in 75..400 {
+            assert_eq!(doc.map.tiles[idx].ground, 0);
+        }
     }
 
     #[test]

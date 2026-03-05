@@ -10,6 +10,11 @@ const TILE_PREVIEW_HEIGHT: f32 = 26.0;
 const WALL_PREVIEW_WIDTH: f32 = 28.0;
 const WALL_PREVIEW_HEIGHT: f32 = 56.0;
 const TILE_SHEET_MIN_HEIGHT: f32 = 96.0;
+const TAB_MAP_COLLAPSE_ID: &str = "inspector_tab_map_preview";
+const TAB_MAP_ROW_HEIGHT_OPEN: f32 = 22.0;
+const TAB_MAP_ROW_HEIGHT_COLLAPSED: f32 = 18.0;
+const TAB_MAP_BORDER_PAD_OPEN: f32 = 10.0;
+const TAB_MAP_BORDER_PAD_COLLAPSED: f32 = 4.0;
 
 pub struct InspectorPanel;
 
@@ -26,6 +31,8 @@ impl InspectorPanel {
         active_paint_layer: &mut PaintLayer,
         selected_ground_tile: &mut u16,
         selected_wall_tile: &mut u16,
+        reveal_ground_tile: &mut Option<u16>,
+        reveal_wall_tile: &mut Option<u16>,
     ) {
         let colors = theme_colors();
 
@@ -56,6 +63,8 @@ impl InspectorPanel {
                     active_paint_layer,
                     selected_ground_tile,
                     selected_wall_tile,
+                    reveal_ground_tile,
+                    reveal_wall_tile,
                 );
             });
     }
@@ -73,14 +82,16 @@ impl InspectorPanel {
         active_paint_layer: &mut PaintLayer,
         selected_ground_tile: &mut u16,
         selected_wall_tile: &mut u16,
+        reveal_ground_tile: &mut Option<u16>,
+        reveal_wall_tile: &mut Option<u16>,
     ) {
-        let tab_map_id = ui.make_persistent_id("inspector_tab_map_preview");
-        let tab_map_open = egui::collapsing_header::CollapsingState::load_with_default_open(
+        let tab_map_id = ui.make_persistent_id(egui::Id::new(TAB_MAP_COLLAPSE_ID));
+        let mut tab_map_state = egui::collapsing_header::CollapsingState::load_with_default_open(
             ui.ctx(),
             tab_map_id,
             true,
-        )
-        .is_open();
+        );
+        let tab_map_open = tab_map_state.is_open();
 
         // Draw left border
         let panel_rect = ui.max_rect();
@@ -105,28 +116,64 @@ impl InspectorPanel {
             active_paint_layer,
             selected_ground_tile,
             selected_wall_tile,
+            reveal_ground_tile,
+            reveal_wall_tile,
             tab_map_open,
         );
 
+        let tab_map_border_pad = if tab_map_open {
+            TAB_MAP_BORDER_PAD_OPEN
+        } else {
+            TAB_MAP_BORDER_PAD_COLLAPSED
+        };
+
         // --- Tile palette bottom border ---
-        Self::full_width_border(ui, colors, panel_rect);
+        Self::full_width_border(ui, colors, panel_rect, tab_map_border_pad);
 
         // --- Tab Map section ---
-        egui::CollapsingHeader::new(
-            egui::RichText::new("Tab Map")
-                .size(14.0)
-                .strong()
-                .color(colors.text),
-        )
-        .id_salt("inspector_tab_map_preview")
-        .default_open(true)
-        .show_unindented(ui, |ui| {
+        let row_height = if tab_map_state.is_open() {
+            TAB_MAP_ROW_HEIGHT_OPEN
+        } else {
+            TAB_MAP_ROW_HEIGHT_COLLAPSED
+        };
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), row_height),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.label(
+                    egui::RichText::new("Tab Map")
+                        .size(14.0)
+                        .strong()
+                        .color(colors.text),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let toggle_label = if tab_map_state.is_open() { "-" } else { "+" };
+                    let response = ui.add_sized(
+                        egui::vec2(18.0, 16.0),
+                        egui::Button::new(
+                            egui::RichText::new(toggle_label)
+                                .size(12.0)
+                                .strong()
+                                .color(colors.text),
+                        )
+                        .fill(egui::Color32::TRANSPARENT)
+                        .stroke(egui::Stroke::new(1.0, colors.border))
+                        .corner_radius(0.0),
+                    );
+                    if response.clicked() {
+                        tab_map_state.toggle(ui);
+                    }
+                });
+            },
+        );
+        tab_map_state.store(ui.ctx());
+        if tab_map_state.is_open() {
             ui.add_space(6.0);
             Self::draw_tab_map(ui, colors, map, sotp);
-        });
+        }
 
         // --- Tab Map bottom border ---
-        Self::full_width_border(ui, colors, panel_rect);
+        Self::full_width_border(ui, colors, panel_rect, tab_map_border_pad);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -140,6 +187,8 @@ impl InspectorPanel {
         active_paint_layer: &mut PaintLayer,
         selected_ground_tile: &mut u16,
         selected_wall_tile: &mut u16,
+        reveal_ground_tile: &mut Option<u16>,
+        reveal_wall_tile: &mut Option<u16>,
         tab_map_open: bool,
     ) {
         ui.horizontal(|ui| {
@@ -207,6 +256,7 @@ impl InspectorPanel {
                 tile_atlas,
                 atlas_texture,
                 selected_ground_tile,
+                reveal_ground_tile,
                 max_palette_height,
             );
         } else {
@@ -216,20 +266,38 @@ impl InspectorPanel {
                 wall_atlas,
                 wall_texture,
                 selected_wall_tile,
+                reveal_wall_tile,
                 max_palette_height,
             );
         }
     }
 
     fn palette_max_height(ui: &egui::Ui, tab_map_open: bool) -> f32 {
-        // Keep room for the tab map section below while allowing tile scrolling.
+        // Keep room for the bottom inspector sections below the tile sheet:
+        // - border after palette
+        // - Tab Map row (+/- toggle)
+        // - optional tab-map preview body
+        // - final bottom border
         let available = ui.available_size();
-        let tab_map_reserved = if tab_map_open {
-            (available.x * 0.35 + 80.0).clamp(160.0, 300.0)
+        let border_pad = if tab_map_open {
+            TAB_MAP_BORDER_PAD_OPEN
         } else {
-            40.0
+            TAB_MAP_BORDER_PAD_COLLAPSED
         };
-        (available.y - tab_map_reserved).max(TILE_SHEET_MIN_HEIGHT)
+        let border_h = border_pad * 2.0;
+        let tab_map_row_h = if tab_map_open {
+            TAB_MAP_ROW_HEIGHT_OPEN
+        } else {
+            TAB_MAP_ROW_HEIGHT_COLLAPSED
+        };
+        let tab_map_preview_h = if tab_map_open {
+            6.0 + (available.x.max(0.0) * 0.5)
+        } else {
+            0.0
+        };
+        let reserved = border_h + tab_map_row_h + tab_map_preview_h + border_h;
+
+        (available.y - reserved).max(TILE_SHEET_MIN_HEIGHT)
     }
 
     fn draw_ground_sheet(
@@ -238,6 +306,7 @@ impl InspectorPanel {
         tile_atlas: Option<&render::TileAtlas>,
         atlas_texture: Option<&egui::TextureHandle>,
         selected_ground_tile: &mut u16,
+        reveal_ground_tile: &mut Option<u16>,
         max_palette_height: f32,
     ) {
         let (atlas, texture) = match (tile_atlas, atlas_texture) {
@@ -263,13 +332,6 @@ impl InspectorPanel {
         }
 
         let selectable_count = atlas_count.min(u16::MAX as usize);
-        if *selected_ground_tile == 0 {
-            *selected_ground_tile = 1;
-        }
-        let max_selectable = selectable_count as u16;
-        if *selected_ground_tile > max_selectable {
-            *selected_ground_tile = max_selectable;
-        }
 
         let (tile_w, tile_h) = atlas.tile_size();
         let preview_scale = TILE_PREVIEW_HEIGHT / tile_h as f32;
@@ -278,37 +340,56 @@ impl InspectorPanel {
             (tile_h as f32 * preview_scale).max(1.0).round(),
         );
 
-        let available_w = ui.available_width().max(cell_size.x);
-        let columns = (available_w / cell_size.x).floor().max(1.0) as usize;
-        let row_count = selectable_count.div_ceil(columns);
         let row_height = cell_size.y;
+        let (columns, row_count) = Self::grid_layout(
+            ui,
+            selectable_count,
+            cell_size.x,
+            row_height,
+            max_palette_height,
+        );
 
-        egui::ScrollArea::vertical()
+        let mut scroll_area = egui::ScrollArea::vertical()
             .id_salt("ground_tiles_scroll")
             .max_height(max_palette_height)
-            .auto_shrink([false, false])
-            .show_rows(ui, row_height, row_count, |ui, row_range| {
-                for row in row_range {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
-                        for col in 0..columns {
-                            let idx = row * columns + col;
-                            if idx >= selectable_count {
-                                break;
-                            }
-                            Self::ground_picker_cell(
-                                ui,
-                                colors,
-                                atlas,
-                                texture,
-                                idx as u32,
-                                cell_size,
-                                selected_ground_tile,
-                            );
+            .auto_shrink([false, false]);
+        let mut consumed_reveal = false;
+        if let Some(target_id) = *reveal_ground_tile {
+            let target_idx = target_id.saturating_sub(1) as usize;
+            if target_idx < selectable_count {
+                let target_row = target_idx / columns;
+                scroll_area = scroll_area.vertical_scroll_offset(target_row as f32 * row_height);
+                consumed_reveal = true;
+            } else {
+                *reveal_ground_tile = None;
+            }
+        }
+
+        scroll_area.show_rows(ui, row_height, row_count, |ui, row_range| {
+            for row in row_range {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+                    for col in 0..columns {
+                        let idx = row * columns + col;
+                        if idx >= selectable_count {
+                            break;
                         }
-                    });
-                }
-            });
+                        Self::ground_picker_cell(
+                            ui,
+                            colors,
+                            atlas,
+                            texture,
+                            idx as u32,
+                            cell_size,
+                            selected_ground_tile,
+                        );
+                    }
+                });
+            }
+        });
+        if consumed_reveal {
+            *reveal_ground_tile = None;
+        }
     }
 
     fn draw_wall_sheet(
@@ -317,6 +398,7 @@ impl InspectorPanel {
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
         selected_wall_tile: &mut u16,
+        reveal_wall_tile: &mut Option<u16>,
         max_palette_height: f32,
     ) {
         let (atlas, texture) = match (wall_atlas, wall_texture) {
@@ -343,51 +425,55 @@ impl InspectorPanel {
             return;
         }
 
-        Self::clamp_wall_selection(selected_wall_tile, &wall_ids);
-
         let cell_size = egui::vec2(WALL_PREVIEW_WIDTH, WALL_PREVIEW_HEIGHT);
-        let available_w = ui.available_width().max(cell_size.x);
-        let columns = (available_w / cell_size.x).floor().max(1.0) as usize;
-        let row_count = wall_ids.len().div_ceil(columns);
         let row_height = cell_size.y;
+        let (columns, row_count) = Self::grid_layout(
+            ui,
+            wall_ids.len(),
+            cell_size.x,
+            row_height,
+            max_palette_height,
+        );
 
-        egui::ScrollArea::vertical()
+        let mut scroll_area = egui::ScrollArea::vertical()
             .id_salt("wall_tiles_scroll")
             .max_height(max_palette_height)
-            .auto_shrink([false, false])
-            .show_rows(ui, row_height, row_count, |ui, row_range| {
-                for row in row_range {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
-                        for col in 0..columns {
-                            let idx = row * columns + col;
-                            if idx >= wall_ids.len() {
-                                break;
-                            }
-                            Self::wall_picker_cell(
-                                ui,
-                                colors,
-                                atlas,
-                                texture,
-                                wall_ids[idx],
-                                cell_size,
-                                selected_wall_tile,
-                            );
-                        }
-                    });
-                }
-            });
-    }
-
-    fn clamp_wall_selection(selected_wall_tile: &mut u16, wall_ids: &[u32]) {
-        let first = wall_ids.first().copied().unwrap_or(0);
-        if *selected_wall_tile == 0 {
-            *selected_wall_tile = first.min(u16::MAX as u32) as u16;
-            return;
+            .auto_shrink([false, false]);
+        let mut consumed_reveal = false;
+        if let Some(target_id) = *reveal_wall_tile {
+            if let Some(target_idx) = wall_ids.iter().position(|&id| id == target_id as u32) {
+                let target_row = target_idx / columns;
+                scroll_area = scroll_area.vertical_scroll_offset(target_row as f32 * row_height);
+                consumed_reveal = true;
+            } else {
+                *reveal_wall_tile = None;
+            }
         }
-        let selected = *selected_wall_tile as u32;
-        if wall_ids.binary_search(&selected).is_err() {
-            *selected_wall_tile = first.min(u16::MAX as u32) as u16;
+
+        scroll_area.show_rows(ui, row_height, row_count, |ui, row_range| {
+            for row in row_range {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+                    for col in 0..columns {
+                        let idx = row * columns + col;
+                        if idx >= wall_ids.len() {
+                            break;
+                        }
+                        Self::wall_picker_cell(
+                            ui,
+                            colors,
+                            atlas,
+                            texture,
+                            wall_ids[idx],
+                            cell_size,
+                            selected_wall_tile,
+                        );
+                    }
+                });
+            }
+        });
+        if consumed_reveal {
+            *reveal_wall_tile = None;
         }
     }
 
@@ -478,6 +564,37 @@ impl InspectorPanel {
         response.on_hover_text(format!("Wall {}", wall_id));
     }
 
+    fn grid_layout(
+        ui: &egui::Ui,
+        item_count: usize,
+        cell_width: f32,
+        row_height: f32,
+        max_height: f32,
+    ) -> (usize, usize) {
+        if item_count == 0 {
+            return (1, 0);
+        }
+
+        let base_width = ui.available_width().max(cell_width);
+        let mut columns = (base_width / cell_width).floor().max(1.0) as usize;
+
+        // If scrolling is needed, available inner width shrinks by the scrollbar.
+        // Recompute columns so row math (including reveal-scroll rows) matches
+        // what is actually visible after panel resize.
+        let scrollbar_width = ui.spacing().scroll.bar_width;
+        let width_with_scrollbar = (base_width - scrollbar_width).max(cell_width);
+        let columns_with_scrollbar = (width_with_scrollbar / cell_width).floor().max(1.0) as usize;
+
+        let mut row_count = item_count.div_ceil(columns);
+        let needs_scroll = (row_count as f32 * row_height) > max_height;
+        if needs_scroll && columns_with_scrollbar != columns {
+            columns = columns_with_scrollbar;
+            row_count = item_count.div_ceil(columns);
+        }
+
+        (columns, row_count)
+    }
+
     /// Section header: bold label.
     fn section_header(ui: &mut egui::Ui, colors: &ThemeColors, label: &str) {
         ui.label(
@@ -489,8 +606,13 @@ impl InspectorPanel {
     }
 
     /// Draw a full-width horizontal border spanning edge to edge.
-    fn full_width_border(ui: &mut egui::Ui, colors: &ThemeColors, panel_rect: egui::Rect) {
-        ui.add_space(10.0);
+    fn full_width_border(
+        ui: &mut egui::Ui,
+        colors: &ThemeColors,
+        panel_rect: egui::Rect,
+        padding: f32,
+    ) {
+        ui.add_space(padding);
         let cursor_y = ui.cursor().top();
         let left = panel_rect.left() - 14.0;
         let right = panel_rect.right() + 14.0;
@@ -498,7 +620,7 @@ impl InspectorPanel {
             [egui::pos2(left, cursor_y), egui::pos2(right, cursor_y)],
             egui::Stroke::new(1.0, colors.border),
         );
-        ui.add_space(10.0);
+        ui.add_space(padding);
     }
 
     /// Render a minimap showing only solid (impassable) boundaries.
