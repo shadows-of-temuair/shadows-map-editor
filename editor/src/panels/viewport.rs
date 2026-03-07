@@ -5,6 +5,7 @@ use crate::document::{Camera, LayerVisibility, PaintLayer, TileSelection};
 use crate::prefab;
 use crate::shape::{self, ShapeKind};
 use crate::theme::{ThemeColors, theme_colors};
+use crate::tile_animation::GroundAnimationTable;
 use crate::widgets::{icons, tooltip};
 
 const SELECTION_AUTO_PAN_MARGIN: f32 = 56.0;
@@ -33,6 +34,16 @@ fn is_layer_visible(layers: &LayerVisibility, layer: PaintLayer) -> bool {
         PaintLayer::LeftWall => layers.left_wall,
         PaintLayer::RightWall => layers.right_wall,
     }
+}
+
+fn animated_ground_tile_id(
+    ground_animation_table: Option<&GroundAnimationTable>,
+    tile_id: u16,
+    animation_time_seconds: f64,
+) -> u16 {
+    ground_animation_table
+        .map(|table| table.animated_tile_id(tile_id, animation_time_seconds))
+        .unwrap_or(tile_id)
 }
 
 #[derive(Default)]
@@ -104,10 +115,12 @@ impl ViewportPanel {
         selection_clipboard_available: bool,
         stamp_prefab: Option<&map::Map>,
         tile_atlas: Option<&render::TileAtlas>,
+        ground_animation_table: Option<&GroundAnimationTable>,
         atlas_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
         tab_overlay_texture: Option<&egui::TextureHandle>,
+        animation_time_seconds: f64,
         layers: &mut LayerVisibility,
         show_grid: &mut bool,
         show_collision_overlay: &mut bool,
@@ -181,25 +194,25 @@ impl ViewportPanel {
                     ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
                 let viewport_primary_down =
                     response.is_pointer_button_down_on() && global_primary_down;
+                let press_origin = ui.input(|i| i.pointer.press_origin());
                 let primary_pressed = interaction_enabled
                     && !context_menu_open
-                    && response.contains_pointer()
                     && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
                 let primary_down = interaction_enabled
                     && !context_menu_open
                     && global_primary_down
                     && (viewport_primary_down || selection_drag_start_tile.is_some());
                 let pointer_interact_pos = ui.input(|i| i.pointer.interact_pos());
-                let selection_press_valid = active_tool == Tool::Select
+                let selection_press_started = active_tool == Tool::Select
                     && !paste_preview_active
                     && primary_pressed
-                    && pointer_interact_pos
+                    && press_origin
                         .map(|pos| rect.contains(pos) && !overlay_rect.contains(pos))
                         .unwrap_or(false);
                 let selection_drag_active = active_tool == Tool::Select
                     && !paste_preview_active
                     && primary_down
-                    && (selection_drag_start_tile.is_some() || selection_press_valid);
+                    && (selection_drag_start_tile.is_some() || selection_press_started);
 
                 if active_tool == Tool::Select
                     && interaction_enabled
@@ -243,6 +256,34 @@ impl ViewportPanel {
                     viewport_center.x - camera.offset.x - map_center_x,
                     viewport_center.y - camera.offset.y - map_center_y,
                 );
+                let pressed_selected_tile = if selection_press_started {
+                    press_origin.and_then(|press_pos| {
+                        current_selection.and_then(|selection| {
+                            Self::selected_tile_at_screen_pos(
+                                selection,
+                                press_pos,
+                                origin,
+                                half_w,
+                                half_h,
+                            )
+                        })
+                    })
+                } else {
+                    None
+                };
+                let pressed_map_tile = if selection_press_started {
+                    press_origin
+                        .and_then(|press_pos| Self::screen_to_tile(press_pos, origin, half_w, half_h, map))
+                } else {
+                    None
+                };
+                let selection_press_tile = pressed_selected_tile.or(pressed_map_tile);
+                let selection_pressed_outside_existing = selection_press_started
+                    && current_selection.is_some()
+                    && pressed_selected_tile.is_none();
+                if selection_pressed_outside_existing {
+                    result.clear_selection_requested = true;
+                }
                 let under_wall_selection = Self::under_wall_selection(
                     response.hovered(),
                     map,
@@ -276,6 +317,7 @@ impl ViewportPanel {
                     &painter,
                     map,
                     tile_atlas,
+                    ground_animation_table,
                     atlas_texture,
                     wall_atlas,
                     wall_texture,
@@ -286,6 +328,7 @@ impl ViewportPanel {
                     layers,
                     under_wall_selection,
                     selection_pulse,
+                    animation_time_seconds,
                 );
 
                 // Draw grid overlay
@@ -362,11 +405,13 @@ impl ViewportPanel {
                                             } else {
                                                 egui::CursorIcon::Crosshair
                                             });
-                                        if selection_press_valid {
-                                            result.selection_drag_started = Some((col, row));
+                                        if !selection_pressed_outside_existing {
+                                            if let Some(press_tile) = selection_press_tile {
+                                                result.selection_drag_started = Some(press_tile);
+                                            }
                                         }
 
-                                        if primary_down {
+                                        if !selection_pressed_outside_existing && primary_down {
                                             let anchor = result
                                                 .selection_drag_started
                                                 .or(selection_drag_start_tile);
@@ -380,7 +425,10 @@ impl ViewportPanel {
                                                         ));
                                                 }
                                             }
-                                        } else if primary_pressed && !selection_move_active {
+                                        } else if !selection_pressed_outside_existing
+                                            && primary_pressed
+                                            && !selection_move_active
+                                        {
                                             selection_preview = Some(TileSelection::from_points(
                                                 (col, row),
                                                 (col, row),
@@ -399,9 +447,11 @@ impl ViewportPanel {
                                             paint_layer,
                                             selected_paint_tile,
                                             tile_atlas,
+                                            ground_animation_table,
                                             atlas_texture,
                                             wall_atlas,
                                             wall_texture,
+                                            animation_time_seconds,
                                         );
                                         let shift_held = ui.input(|i| i.modifiers.shift);
                                         if response.clicked_by(egui::PointerButton::Primary) {
@@ -434,9 +484,11 @@ impl ViewportPanel {
                                                 paint_layer,
                                                 selected_paint_tile,
                                                 tile_atlas,
+                                                ground_animation_table,
                                                 atlas_texture,
                                                 wall_atlas,
                                                 wall_texture,
+                                                animation_time_seconds,
                                             );
                                         } else {
                                             Self::draw_paint_preview(
@@ -449,9 +501,11 @@ impl ViewportPanel {
                                                 paint_layer,
                                                 selected_paint_tile,
                                                 tile_atlas,
+                                                ground_animation_table,
                                                 atlas_texture,
                                                 wall_atlas,
                                                 wall_texture,
+                                                animation_time_seconds,
                                             );
                                         }
                                         if response.clicked_by(egui::PointerButton::Primary) {
@@ -474,9 +528,11 @@ impl ViewportPanel {
                                                 paint_layer,
                                                 selected_paint_tile,
                                                 tile_atlas,
+                                                ground_animation_table,
                                                 atlas_texture,
                                                 wall_atlas,
                                                 wall_texture,
+                                                animation_time_seconds,
                                             );
                                         } else {
                                             Self::draw_paint_preview(
@@ -489,9 +545,11 @@ impl ViewportPanel {
                                                 paint_layer,
                                                 selected_paint_tile,
                                                 tile_atlas,
+                                                ground_animation_table,
                                                 atlas_texture,
                                                 wall_atlas,
                                                 wall_texture,
+                                                animation_time_seconds,
                                             );
                                         }
                                         if response.clicked_by(egui::PointerButton::Primary) {
@@ -511,9 +569,11 @@ impl ViewportPanel {
                                             paint_layer,
                                             selected_paint_tile,
                                             tile_atlas,
+                                            ground_animation_table,
                                             atlas_texture,
                                             wall_atlas,
                                             wall_texture,
+                                            animation_time_seconds,
                                         );
                                         if response.clicked_by(egui::PointerButton::Primary) {
                                             result.fill_clicked_tile =
@@ -543,9 +603,11 @@ impl ViewportPanel {
                                                 half_w,
                                                 half_h,
                                                 tile_atlas,
+                                                ground_animation_table,
                                                 atlas_texture,
                                                 wall_atlas,
                                                 wall_texture,
+                                                animation_time_seconds,
                                             );
                                             if response.clicked_by(egui::PointerButton::Primary) {
                                                 result.stamp_clicked_tile = Some((col, row));
@@ -573,9 +635,11 @@ impl ViewportPanel {
                                                     half_w,
                                                     half_h,
                                                     tile_atlas,
+                                                    ground_animation_table,
                                                     atlas_texture,
                                                     tile_id,
                                                     180,
+                                                    animation_time_seconds,
                                                 );
                                             }
                                             EyedropperPick::LeftWall(wall_id) if wall_id != 0 => {
@@ -702,9 +766,11 @@ impl ViewportPanel {
                         half_w,
                         half_h,
                         tile_atlas,
+                        ground_animation_table,
                         atlas_texture,
                         wall_atlas,
                         wall_texture,
+                        animation_time_seconds,
                     );
                 }
 
@@ -737,9 +803,11 @@ impl ViewportPanel {
                         half_w,
                         half_h,
                         tile_atlas,
+                        ground_animation_table,
                         atlas_texture,
                         wall_atlas,
                         wall_texture,
+                        animation_time_seconds,
                     );
                     Self::draw_tile_selection_outline(
                         &painter,
@@ -960,6 +1028,7 @@ impl ViewportPanel {
         painter: &egui::Painter,
         map: &map::Map,
         tile_atlas: Option<&render::TileAtlas>,
+        ground_animation_table: Option<&GroundAnimationTable>,
         tile_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
@@ -970,6 +1039,7 @@ impl ViewportPanel {
         layers: &LayerVisibility,
         wall_outline_selection: Option<TileSelection>,
         selection_pulse: f32,
+        animation_time_seconds: f64,
     ) {
         let tw = half_w * 2.0;
         let th = half_h * 2.0;
@@ -1009,7 +1079,12 @@ impl ViewportPanel {
                 // --- Ground ---
                 if layers.ground && tile.ground != 0 {
                     if let (Some(atlas), Some(mesh)) = (tile_atlas, ground_mesh.as_mut()) {
-                        let atlas_index = (tile.ground - 1) as u32;
+                        let animated_tile_id = animated_ground_tile_id(
+                            ground_animation_table,
+                            tile.ground,
+                            animation_time_seconds,
+                        );
+                        let atlas_index = animated_tile_id.saturating_sub(1) as u32;
                         let tile_rect = egui::Rect::from_min_size(
                             egui::pos2(cx - half_w, cy),
                             egui::vec2(tw, th),
@@ -1997,7 +2072,10 @@ impl ViewportPanel {
 
     fn selection_pulse_opacity(ctx: &egui::Context) -> f32 {
         let time = ctx.input(|i| i.time) as f32;
-        0.55 + 0.45 * ((time * 2.0).sin() * 0.5 + 0.5)
+        let phase = time * std::f32::consts::TAU / 2.8;
+        let breath = 0.5 - 0.5 * phase.cos();
+        let eased = breath * breath * (3.0 - 2.0 * breath);
+        0.35 + 0.65 * eased
     }
 
     fn wall_outline_sprite_for_tile(
@@ -2250,9 +2328,11 @@ impl ViewportPanel {
         paint_layer: PaintLayer,
         paint_value: u16,
         tile_atlas: Option<&render::TileAtlas>,
+        ground_animation_table: Option<&GroundAnimationTable>,
         tile_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
+        animation_time_seconds: f64,
     ) {
         Self::draw_paint_preview_alpha(
             painter,
@@ -2264,10 +2344,12 @@ impl ViewportPanel {
             paint_layer,
             paint_value,
             tile_atlas,
+            ground_animation_table,
             tile_texture,
             wall_atlas,
             wall_texture,
             180,
+            animation_time_seconds,
         );
     }
 
@@ -2282,10 +2364,12 @@ impl ViewportPanel {
         paint_layer: PaintLayer,
         paint_value: u16,
         tile_atlas: Option<&render::TileAtlas>,
+        ground_animation_table: Option<&GroundAnimationTable>,
         tile_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
         alpha: u8,
+        animation_time_seconds: f64,
     ) {
         match paint_layer {
             PaintLayer::Ground => Self::draw_ground_preview(
@@ -2296,9 +2380,11 @@ impl ViewportPanel {
                 half_w,
                 half_h,
                 tile_atlas,
+                ground_animation_table,
                 tile_texture,
                 paint_value,
                 alpha,
+                animation_time_seconds,
             ),
             PaintLayer::LeftWall => Self::draw_wall_preview(
                 painter,
@@ -2338,16 +2424,23 @@ impl ViewportPanel {
         half_w: f32,
         half_h: f32,
         tile_atlas: Option<&render::TileAtlas>,
+        ground_animation_table: Option<&GroundAnimationTable>,
         tile_texture: Option<&egui::TextureHandle>,
         selected_ground_tile: u16,
         alpha: u8,
+        animation_time_seconds: f64,
     ) {
         let (atlas, texture) = match (tile_atlas, tile_texture) {
             (Some(a), Some(t)) => (a, t),
             _ => return,
         };
 
-        let atlas_index = selected_ground_tile.saturating_sub(1) as u32;
+        let animated_tile_id = animated_ground_tile_id(
+            ground_animation_table,
+            selected_ground_tile,
+            animation_time_seconds,
+        );
+        let atlas_index = animated_tile_id.saturating_sub(1) as u32;
         let (u0, v0, u1, v1) = match atlas.tile_uv(atlas_index) {
             Some(uv) => uv,
             None => return,
@@ -2437,9 +2530,11 @@ impl ViewportPanel {
         half_w: f32,
         half_h: f32,
         tile_atlas: Option<&render::TileAtlas>,
+        ground_animation_table: Option<&GroundAnimationTable>,
         tile_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
+        animation_time_seconds: f64,
     ) {
         let anchor = prefab::placement_anchor(prefab);
 
@@ -2471,10 +2566,12 @@ impl ViewportPanel {
                         PaintLayer::Ground,
                         tile.ground,
                         tile_atlas,
+                        ground_animation_table,
                         tile_texture,
                         wall_atlas,
                         wall_texture,
                         140,
+                        animation_time_seconds,
                     );
                 }
                 if is_rendered_wall(tile.left_wall) {
@@ -2488,10 +2585,12 @@ impl ViewportPanel {
                         PaintLayer::LeftWall,
                         tile.left_wall,
                         tile_atlas,
+                        ground_animation_table,
                         tile_texture,
                         wall_atlas,
                         wall_texture,
                         150,
+                        animation_time_seconds,
                     );
                 }
                 if is_rendered_wall(tile.right_wall) {
@@ -2505,10 +2604,12 @@ impl ViewportPanel {
                         PaintLayer::RightWall,
                         tile.right_wall,
                         tile_atlas,
+                        ground_animation_table,
                         tile_texture,
                         wall_atlas,
                         wall_texture,
                         150,
+                        animation_time_seconds,
                     );
                 }
             }
@@ -2576,9 +2677,11 @@ impl ViewportPanel {
         half_w: f32,
         half_h: f32,
         tile_atlas: Option<&render::TileAtlas>,
+        ground_animation_table: Option<&GroundAnimationTable>,
         tile_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
+        animation_time_seconds: f64,
     ) {
         for src_row in 0..selection_map.height {
             for src_col in 0..selection_map.width {
@@ -2598,10 +2701,12 @@ impl ViewportPanel {
                         PaintLayer::Ground,
                         tile.ground,
                         tile_atlas,
+                        ground_animation_table,
                         tile_texture,
                         wall_atlas,
                         wall_texture,
                         140,
+                        animation_time_seconds,
                     );
                 }
                 if layers.left_wall && is_rendered_wall(tile.left_wall) {
@@ -2615,10 +2720,12 @@ impl ViewportPanel {
                         PaintLayer::LeftWall,
                         tile.left_wall,
                         tile_atlas,
+                        ground_animation_table,
                         tile_texture,
                         wall_atlas,
                         wall_texture,
                         150,
+                        animation_time_seconds,
                     );
                 }
                 if layers.right_wall && is_rendered_wall(tile.right_wall) {
@@ -2632,10 +2739,12 @@ impl ViewportPanel {
                         PaintLayer::RightWall,
                         tile.right_wall,
                         tile_atlas,
+                        ground_animation_table,
                         tile_texture,
                         wall_atlas,
                         wall_texture,
                         150,
+                        animation_time_seconds,
                     );
                 }
             }
@@ -2875,9 +2984,11 @@ impl ViewportPanel {
         paint_layer: PaintLayer,
         paint_value: u16,
         tile_atlas: Option<&render::TileAtlas>,
+        ground_animation_table: Option<&GroundAnimationTable>,
         tile_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
+        animation_time_seconds: f64,
     ) {
         let points = shape::paint_points(shape_kind, start, end);
         for (x, y) in points {
@@ -2898,9 +3009,11 @@ impl ViewportPanel {
                 paint_layer,
                 paint_value,
                 tile_atlas,
+                ground_animation_table,
                 tile_texture,
                 wall_atlas,
                 wall_texture,
+                animation_time_seconds,
             );
         }
     }
@@ -2980,9 +3093,11 @@ impl ViewportPanel {
         paint_layer: PaintLayer,
         paint_value: u16,
         tile_atlas: Option<&render::TileAtlas>,
+        ground_animation_table: Option<&GroundAnimationTable>,
         tile_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
+        animation_time_seconds: f64,
     ) {
         let (mut x0, mut y0) = (start.0 as i32, start.1 as i32);
         let (x1, y1) = (end.0 as i32, end.1 as i32);
@@ -3005,9 +3120,11 @@ impl ViewportPanel {
                     paint_layer,
                     paint_value,
                     tile_atlas,
+                    ground_animation_table,
                     tile_texture,
                     wall_atlas,
                     wall_texture,
+                    animation_time_seconds,
                 );
             }
 

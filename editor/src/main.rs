@@ -12,6 +12,7 @@ mod panels;
 mod prefab;
 mod shape;
 mod theme;
+mod tile_animation;
 mod widgets;
 
 use app::EditorApp;

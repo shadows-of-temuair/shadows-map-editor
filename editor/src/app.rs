@@ -4,6 +4,7 @@ use std::{
     path::Path,
     path::PathBuf,
     sync::mpsc::{self, Receiver},
+    time::Duration,
 };
 
 use eframe::egui;
@@ -25,6 +26,7 @@ use crate::panels::{
 use crate::prefab::{self, PrefabAsset};
 use crate::shape::{self, ShapeKind};
 use crate::theme;
+use crate::tile_animation::GroundAnimationTable;
 
 const SELECTION_CLIPBOARD_SENTINEL: &str = "__shadows_map_editor_selection__";
 
@@ -55,6 +57,7 @@ struct LoadedAssets {
     tile_atlas: Option<render::TileAtlas>,
     wall_atlas: Option<render::SpriteAtlas>,
     sotp_data: Option<Vec<u8>>,
+    ground_animation_table: Option<GroundAnimationTable>,
 }
 
 enum AssetImportProgressEvent {
@@ -121,6 +124,7 @@ pub struct EditorApp {
     wall_texture: Option<egui::TextureHandle>,
     tab_overlay_texture: Option<egui::TextureHandle>,
     sotp_data: Option<Vec<u8>>,
+    ground_animation_table: Option<GroundAnimationTable>,
     map_list: Option<MapList>,
     prefab_assets: Vec<PrefabAsset>,
     selected_prefab: Option<usize>,
@@ -185,6 +189,7 @@ impl EditorApp {
             tile_atlas: None,
             wall_atlas: None,
             sotp_data: None,
+            ground_animation_table: None,
             map_list,
             prefab_assets,
             selected_prefab,
@@ -430,6 +435,27 @@ impl EditorApp {
             );
         }
 
+        let ground_animation_table =
+            match Self::get_pool_asset_case_insensitive(&pool, "gndani.tbl") {
+                Some(data) => match GroundAnimationTable::from_gndani_bytes(data) {
+                    Ok(table) => {
+                        info!(
+                            "Loaded gndani.tbl ({} animated ground sequences)",
+                            table.entry_count()
+                        );
+                        Some(table)
+                    }
+                    Err(error) => {
+                        warn!("Failed to parse gndani.tbl: {}", error);
+                        None
+                    }
+                },
+                None => {
+                    info!("gndani.tbl not found in asset archives");
+                    None
+                }
+            };
+
         progress(
             "Loading assets: tile and wall atlases (3/5)".to_string(),
             2,
@@ -508,6 +534,7 @@ impl EditorApp {
             tile_atlas,
             wall_atlas,
             sotp_data,
+            ground_animation_table,
         })
     }
 
@@ -616,6 +643,7 @@ impl EditorApp {
         self.tile_atlas = assets.tile_atlas;
         self.wall_atlas = assets.wall_atlas;
         self.sotp_data = assets.sotp_data;
+        self.ground_animation_table = assets.ground_animation_table;
         self.atlas_texture = None;
         self.wall_texture = None;
 
@@ -1836,6 +1864,8 @@ impl EditorApp {
     fn undo_active_document(&mut self) {
         let doc = &mut self.documents[self.active_tab];
         if doc.undo() {
+            self.selection_drag_start_tile = None;
+            self.selection_drag_mode = None;
             self.status_message = "Undo".to_string();
         }
     }
@@ -1843,6 +1873,8 @@ impl EditorApp {
     fn redo_active_document(&mut self) {
         let doc = &mut self.documents[self.active_tab];
         if doc.redo() {
+            self.selection_drag_start_tile = None;
+            self.selection_drag_mode = None;
             self.status_message = "Redo".to_string();
         }
     }
@@ -2280,6 +2312,14 @@ impl eframe::App for EditorApp {
         self.poll_asset_import_progress(ctx);
         self.poll_asset_load_progress(ctx);
 
+        if let Some(interval_ms) = self
+            .ground_animation_table
+            .as_ref()
+            .and_then(|table| table.minimum_interval_ms())
+        {
+            ctx.request_repaint_after(Duration::from_millis(u64::from(interval_ms.max(16))));
+        }
+
         // Deferred atlas uploads
         self.try_upload_atlas(ctx);
         self.try_upload_wall_atlas(ctx);
@@ -2545,6 +2585,10 @@ impl eframe::App for EditorApp {
 
         let stamp_prefab = self.selected_prefab_map().cloned();
         let shift_held = ctx.input(|i| i.modifiers.shift);
+        let primary_pressed = ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
+        if primary_pressed && self.selection_drag_mode.is_some() {
+            self.finalize_selection_drag(shift_held);
+        }
         let selection_action_layers = self.selection_action_layers(shift_held);
         let selection_move_layers = self.selection_move_layers();
         let selection_duplicate_layers = self.selection_duplicate_layers();
@@ -2625,10 +2669,12 @@ impl eframe::App for EditorApp {
                 self.selection_clipboard.is_some(),
                 stamp_prefab.as_ref(),
                 self.tile_atlas.as_ref(),
+                self.ground_animation_table.as_ref(),
                 self.atlas_texture.as_ref(),
                 self.wall_atlas.as_ref(),
                 self.wall_texture.as_ref(),
                 self.tab_overlay_texture.as_ref(),
+                ctx.input(|i| i.time),
                 &mut self.layer_visibility,
                 &mut self.show_grid,
                 &mut self.show_collision_overlay,
@@ -2638,7 +2684,12 @@ impl eframe::App for EditorApp {
         if let Some(tile) = vp_result.hover_tile {
             self.hover_tile = tile;
         }
-        if let Some(tile) = vp_result.selection_drag_started {
+        if vp_result.clear_selection_requested {
+            let _ = self.clear_active_selection();
+        }
+        if !vp_result.clear_selection_requested
+            && let Some(tile) = vp_result.selection_drag_started
+        {
             let current_selection = self.documents[self.active_tab].selection();
             self.selection_drag_start_tile = Some(tile);
             if let Some(selection) = current_selection.filter(|selection| selection.contains(tile))
@@ -2678,7 +2729,9 @@ impl eframe::App for EditorApp {
                 }
             }
         }
-        if let Some(tile) = vp_result.selection_drag_tile {
+        if !vp_result.clear_selection_requested
+            && let Some(tile) = vp_result.selection_drag_tile
+        {
             if let (Some(start), Some(mode)) = (
                 self.selection_drag_start_tile,
                 self.selection_drag_mode.as_ref(),
@@ -2713,9 +2766,6 @@ impl eframe::App for EditorApp {
                     }
                 }
             }
-        }
-        if vp_result.clear_selection_requested {
-            self.documents[self.active_tab].set_selection(None);
         }
         if vp_result.cut_selection_requested {
             if self.cut_active_selection_to_clipboard(selection_action_layers) {
@@ -2856,72 +2906,15 @@ impl eframe::App for EditorApp {
             doc.paint_layer_stroke_tile(paint_layer, col, row, paint_value);
         }
         let primary_down = ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
+        if !primary_down {
+            doc.finish_stroke();
+        }
+        let _ = doc;
         if self.active_tool == Tool::Select && !primary_down {
-            if let Some(SelectionDragMode::Moving {
-                original_selection,
-                created_from_empty,
-                ..
-            }) = self.selection_drag_mode.as_ref()
-            {
-                let original_selection = *original_selection;
-                let created_from_empty = *created_from_empty;
-                let preview_selection = doc.selection().unwrap_or(original_selection);
-                let (preview_min_col, preview_min_row, _, _) =
-                    preview_selection.normalized_bounds();
-                let (original_min_col, original_min_row, _, _) =
-                    original_selection.normalized_bounds();
-                if preview_min_col != original_min_col || preview_min_row != original_min_row {
-                    if shift_held {
-                        let source = doc.selection_map_for_visible_layers(
-                            original_selection,
-                            selection_duplicate_layers,
-                        );
-                        let (width, height) = original_selection.dimensions();
-                        let changed = doc.paste_visible_layers(
-                            (preview_min_col, preview_min_row),
-                            &source,
-                            selection_duplicate_layers,
-                        );
-                        doc.set_selection(Some(TileSelection::from_top_left_size(
-                            (preview_min_col, preview_min_row),
-                            width,
-                            height,
-                        )));
-                        if changed > 0 {
-                            self.status_message = format!(
-                                "Duplicated selection to {}, {}.",
-                                preview_min_col, preview_min_row
-                            );
-                        }
-                    } else {
-                        let changed = doc.move_selection_visible_layers(
-                            original_selection,
-                            (preview_min_col, preview_min_row),
-                            selection_move_layers,
-                        );
-                        if changed > 0 {
-                            self.status_message = format!(
-                                "Moved selection to {}, {}.",
-                                preview_min_col, preview_min_row
-                            );
-                        }
-                    }
-                } else {
-                    if created_from_empty {
-                        doc.set_selection(None);
-                    } else {
-                        doc.set_selection(Some(original_selection));
-                    }
-                }
-            }
-            self.selection_drag_start_tile = None;
-            self.selection_drag_mode = None;
+            self.finalize_selection_drag(shift_held);
         } else if self.active_tool != Tool::Select {
             self.selection_drag_start_tile = None;
             self.selection_drag_mode = None;
-        }
-        if !primary_down {
-            doc.finish_stroke();
         }
 
         let unsaved_changes_action = self.unsaved_changes_dialog.show(ctx);

@@ -12,6 +12,7 @@ const STATUS_PROGRESS_BAR_SIZE: egui::Vec2 = egui::vec2(112.0, 10.0);
 const STATUS_MESSAGE_FADE_SECONDS: f64 = 0.18;
 const STATUS_POSITION_WIDTH: f32 = 92.0;
 const STATUS_SELECTION_WIDTH: f32 = 148.0;
+const MAX_DIMENSION_CANDIDATES: usize = 12;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum StatusBarAction {
@@ -190,7 +191,7 @@ impl StatusBarPanel {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
 
-                        // Position (rightmost) — fixed width to prevent layout jitter
+                        // Position — fixed width to prevent layout jitter
                         let pos_text = format!("Pos: {:>3}, {:>3}", hover_tile.0, hover_tile.1);
                         ui.add_sized(
                             egui::vec2(STATUS_POSITION_WIDTH, 18.0),
@@ -265,7 +266,10 @@ impl StatusBarPanel {
                                 match document_kind {
                                     DocumentKind::Map => {
                                         let tile_count = map.tiles.len();
-                                        let dims = map::all_dimensions(tile_count);
+                                        let dims: Vec<_> = map::all_dimensions(tile_count)
+                                            .into_iter()
+                                            .take(MAX_DIMENSION_CANDIDATES)
+                                            .collect();
                                         egui::ScrollArea::vertical().max_height(200.0).show(
                                             ui,
                                             |ui| {

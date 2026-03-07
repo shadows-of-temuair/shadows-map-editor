@@ -1,4 +1,4 @@
-use std::io;
+use std::{cmp::Reverse, io};
 use std::path::Path;
 
 pub const TILE_WIDTH: f32 = 56.0;
@@ -98,8 +98,8 @@ impl Map {
     }
 }
 
-/// Returns all valid `(width, height)` factor pairs for `n` tiles where
-/// `width >= height`, ordered from most square to most elongated.
+/// Returns all valid `(width, height)` factor pairs for `n` tiles, including
+/// both orientations, ordered from most square to most elongated.
 pub fn all_dimensions(n: usize) -> Vec<(u16, u16)> {
     if n == 0 {
         return vec![(0, 0)];
@@ -108,13 +108,16 @@ pub fn all_dimensions(n: usize) -> Vec<(u16, u16)> {
     let mut d = 1usize;
     while d * d <= n {
         if n % d == 0 {
-            let h = d as u16;
-            let w = (n / d) as u16;
-            pairs.push((w, h));
+            let a = d as u16;
+            let b = (n / d) as u16;
+            pairs.push((a, b));
+            if a != b {
+                pairs.push((b, a));
+            }
         }
         d += 1;
     }
-    pairs.sort_by_key(|&(w, h)| w - h);
+    pairs.sort_by_key(|&(w, h)| (w.abs_diff(h), Reverse(w >= h), w.max(h), w.min(h)));
     pairs
 }
 
@@ -162,19 +165,20 @@ mod tests {
         // 2500 = 50*50, many factors
         let dims = all_dimensions(2500);
         assert_eq!(dims[0], (50, 50)); // most square first
+        assert!(dims.contains(&(25, 100)));
         assert!(dims.contains(&(100, 25)));
         assert!(dims.contains(&(2500, 1)));
+        assert!(dims.contains(&(1, 2500)));
         // all pairs valid
         for &(w, h) in &dims {
             assert_eq!(w as usize * h as usize, 2500);
-            assert!(w >= h);
         }
     }
 
     #[test]
     fn test_all_dimensions_prime() {
-        // 7 is prime → only (7, 1)
-        assert_eq!(all_dimensions(7), vec![(7, 1)]);
+        // 7 is prime → both orientations, wider first
+        assert_eq!(all_dimensions(7), vec![(7, 1), (1, 7)]);
     }
 
     #[test]
