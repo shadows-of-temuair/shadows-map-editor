@@ -5,13 +5,14 @@ pub const TILE_WIDTH: f32 = 56.0;
 pub const TILE_HEIGHT: f32 = 27.0;
 pub const TILE_BYTES: usize = 6;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Tile {
     pub ground: u16,
     pub left_wall: u16,
     pub right_wall: u16,
 }
 
+#[derive(Clone, Debug)]
 pub struct Map {
     pub width: u16,
     pub height: u16,
@@ -97,9 +98,8 @@ impl Map {
     }
 }
 
-/// Returns all valid (width, height) factor pairs for `n` tiles,
-/// including both orientations (e.g. 4x5 and 5x4).
-/// Sorted by ascending width so the most square pairs are in the middle.
+/// Returns all valid `(width, height)` factor pairs for `n` tiles where
+/// `width >= height`, ordered from most square to most elongated.
 pub fn all_dimensions(n: usize) -> Vec<(u16, u16)> {
     if n == 0 {
         return vec![(0, 0)];
@@ -108,16 +108,13 @@ pub fn all_dimensions(n: usize) -> Vec<(u16, u16)> {
     let mut d = 1usize;
     while d * d <= n {
         if n % d == 0 {
-            let w = d as u16;
-            let h = (n / d) as u16;
+            let h = d as u16;
+            let w = (n / d) as u16;
             pairs.push((w, h));
-            if w != h {
-                pairs.push((h, w));
-            }
         }
         d += 1;
     }
-    pairs.sort_by_key(|&(w, _)| w);
+    pairs.sort_by_key(|&(w, h)| w - h);
     pairs
 }
 

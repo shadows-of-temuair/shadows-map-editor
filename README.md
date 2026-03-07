@@ -59,6 +59,41 @@ shadows-map-editor/
 
 Archives are loaded alphabetically. If multiple archives contain the same filename, the last one (alphabetically) wins.
 
+## Prefabs
+
+Prefabs are reusable multi-tile map pieces for composing repeated world objects quickly: trees, tables, grave plots, wall segments, building chunks, and other stampable arrangements of ground and wall tiles.
+
+Prefab definitions live in `prefabs/` at the project root, alongside `assets/`. Each prefab is stored as a `.ron` file and can be edited in its own tab (`prefab: ...`) using the same tile/wall tools as normal maps.
+
+Typical prefab workflow:
+- Build a reusable object once in a prefab tab
+- Save it into `prefabs/`
+- Select it from the prefab browser
+- Stamp it into one or many maps with undo/redo support
+
+Creating prefabs:
+- Activate the `Prefab` tool (`P`) to switch the inspector from the tile palette to the prefab browser
+- Click `New` to create a new prefab tab
+- Paint the prefab using the normal ground/wall editing tools
+- Save it as a `.ron` file in `prefabs/`
+
+Managing prefabs:
+- `Import` copies an existing `.ron` prefab into the local `prefabs/` registry
+- The prefab list supports live search by partial filename match
+- List rows show the prefab file stem and occupied dimensions, not the full canvas size
+- Double-click a prefab row, or use `Edit` from the preview header, to open that prefab in a tab
+- Right-click a prefab row for `Delete Prefab...`, which asks for confirmation before removing the local `.ron`
+
+Placing prefabs:
+- The bottom inspector pane shows a rendered preview of the selected prefab using the loaded ground and wall assets
+- Placement uses the center of the prefab's occupied area, so empty canvas padding does not shift the stamp
+- Stamping participates in normal undo/redo history
+
+Empty prefab cells are transparent when placed:
+- `ground = 0` does not overwrite map ground
+- `left_wall = 0` does not overwrite the destination left wall
+- `right_wall = 0` does not overwrite the destination right wall
+
 ## Usage
 
 Run from the project root (so the `assets/` directory is found):
@@ -67,10 +102,10 @@ Run from the project root (so the `assets/` directory is found):
 cargo run --release
 ```
 
-### Opening Maps
+### Opening Documents
 
 - **Cmd+O** — Open a `.map` file via file dialog
-- **Drag and drop** — Drop `.map` files directly onto the window to open them
+- **Drag and drop** — Drop `.map` or `.ron` files directly onto the window to open them
 - **Cmd+N** — Open the New Map size dialog and create a new map
 - **Cmd+W** — Close the active tab
 
@@ -95,11 +130,13 @@ If `maps.ron` exists in the project root, the editor uses it as map metadata:
 - **Tab** — Toggle tab collision overlay on the main viewport (requires `SOTP.DAT`)
 - The `Tab` overlay toggle affects only the main map viewport (not the inspector tab map or tab map PNG export).
 - Floating viewport controls include `Grid` and `Tab` toggles in the top-right.
+- The inspector bottom panel shows the map's `Tab Map` normally, and switches to a collapsible `Prefab Preview` while the Prefab tool is active.
 
 ### Editing
 
 - **B** — Switch to Brush tool
 - **L** — Switch to Line tool
+- **P** — Switch to Prefab tool
 - **E** — Switch to Eraser tool
 - **G** — Switch to Fill tool
 - **I** — Switch to Eyedropper tool
@@ -115,10 +152,19 @@ If `maps.ron` exists in the project root, the editor uses it as map metadata:
 - **Esc** or **Right click (Line/Shape)** — Cancel the pending start point
 - **Left click/drag (Eraser)** — Clear ground tiles (writes tile ID `0`)
 - **Left click (Fill)** — Flood-fill contiguous ground region with the selected ground tile
+- **Prefab tool** — Uses the selected prefab from the inspector's `Prefab Library`
+- **Left click (Prefab)** — Place the selected prefab centered on the hovered tile using the occupied prefab bounds, with live translucent preview
 - **Left click (Eyedropper)** — Pick the hovered value for the active palette mode (ground in Ground mode, left wall in Wall mode)
 - **Shift+Left click (Eyedropper)** — In Wall mode, pick the hovered right wall instead of left wall
 - **Eyedropper hover highlight** — Shows exactly which ground/wall target will be sampled before clicking
 - **Alt/Option (hold)** — Temporarily use Eyedropper while held (supports the same Shift behavior)
+- **Prefab tool inspector** — Replaces the tile palette with the prefab browser
+- **Search prefabs** — Filters the prefab list by partial filename match as you type
+- **Prefab list rows** — Show the prefab file stem and the occupied dimensions, not the full canvas size
+- **New** — Create a new prefab tab
+- **Import** — Pick a `.ron` prefab file and copy it into the local `prefabs/` registry
+- **Right click prefab row** — Open prefab actions, including delete with confirmation
+- **Preview** — The inspector bottom panel shows a rendered ground+wall preview of the selected prefab, scaled to fit
 
 ### Export
 
@@ -142,6 +188,7 @@ The active file name is shown in the status bar next to zoom controls so it is a
 ```
 ├── archive/    # .dat archive memory-mapped loader
 ├── map/        # Map data structures and tile format
+├── prefabs/    # Prefab `.ron` files used by the editor prefab tool
 ├── render/     # Palette, tile atlas, sprite atlas, HPF decoder
 └── editor/     # egui application, UI panels, PNG export
 ```
@@ -149,3 +196,7 @@ The active file name is shown in the status bar next to zoom controls so it is a
 ## Map Format
 
 Each `.map` file is raw binary — 6 bytes per tile (three little-endian `u16` values: ground ID, left wall ID, right wall ID). The editor infers map dimensions from the tile count.
+
+## Prefab Format
+
+Each `.ron` prefab stores `width`, `height`, and a flat `tiles` array. Tile fields are optional in RON and only non-zero layers are placed onto destination maps.

@@ -308,7 +308,7 @@ impl TabBarPanel {
     }
 
     fn named_map_filename(doc: &MapDocument) -> Option<String> {
-        if doc.map_name_hint.is_none() {
+        if doc.name_hint.is_none() {
             return None;
         }
 

@@ -1,17 +1,24 @@
-use std::{collections::VecDeque, path::PathBuf};
+use std::{
+    collections::VecDeque,
+    fs,
+    path::Path,
+    path::PathBuf,
+    sync::mpsc::{self, Receiver},
+};
 
 use eframe::egui;
 use tracing::{info, warn};
 
-use crate::document::{LayerVisibility, MapDocument, PaintLayer};
+use crate::document::{DocumentKind, LayerVisibility, MapDocument, PaintLayer};
 use crate::map_list::{MapList, MapMetadataHint};
 use crate::palette_lookup::LoadedPaletteLookup;
 use crate::panels::{
-    ExportDialog, ExportDialogAction, EyedropperPick, InspectorPanel, MapSizeDialog,
-    StatusBarAction, StatusBarPanel, TabBarAction, TabBarPanel, TitleBarPanel, Tool,
-    ToolbarAction, ToolbarPanel, UnsavedChangesDialog, UnsavedChangesDialogAction, ViewportPanel,
-    WindowFrame,
+    AssetSetupDialog, AssetSetupDialogAction, ExportDialog, ExportDialogAction, EyedropperPick,
+    InspectorPanel, InspectorResponse, MapSizeDialog, PrefabDeleteDialog, PrefabDeleteDialogAction,
+    StatusBarAction, StatusBarPanel, TabBarAction, TabBarPanel, TitleBarPanel, Tool, ToolbarAction,
+    ToolbarPanel, UnsavedChangesDialog, UnsavedChangesDialogAction, ViewportPanel, WindowFrame,
 };
+use crate::prefab::{self, PrefabAsset};
 use crate::shape::{self, ShapeKind};
 use crate::theme;
 
@@ -24,6 +31,67 @@ struct PendingUnsavedChanges {
     document_index: usize,
     action: PendingDiscardAction,
 }
+
+struct PendingPrefabDeletion {
+    path: PathBuf,
+    name: String,
+}
+
+struct PendingPrefabRename {
+    path: PathBuf,
+}
+
+struct LoadedAssets {
+    tile_atlas: Option<render::TileAtlas>,
+    wall_atlas: Option<render::SpriteAtlas>,
+    sotp_data: Option<Vec<u8>>,
+}
+
+enum AssetImportProgressEvent {
+    Progress {
+        copied: usize,
+        total: usize,
+        file_name: String,
+    },
+    Finished {
+        copied: usize,
+    },
+    Failed {
+        error: String,
+    },
+}
+
+struct AssetImportTask {
+    receiver: Receiver<AssetImportProgressEvent>,
+    copied: usize,
+    total: usize,
+    current_file: Option<String>,
+    just_started: bool,
+}
+
+enum AssetLoadProgressEvent {
+    Status {
+        message: String,
+        completed_steps: usize,
+        total_steps: usize,
+    },
+    Finished(LoadedAssets),
+    Failed(String),
+}
+
+struct AssetLoadTask {
+    receiver: Receiver<AssetLoadProgressEvent>,
+    completed_steps: usize,
+    total_steps: usize,
+}
+
+enum AtlasBuildResult {
+    Tile(Option<render::TileAtlas>),
+    Wall(Option<render::SpriteAtlas>),
+}
+
+const ASSET_LOAD_STAGE_COUNT: usize = 5;
+const ASSET_SETUP_PROMPT_STATUS: &str = "Assets not found, asking user to setup";
 
 pub struct EditorApp {
     documents: Vec<MapDocument>,
@@ -44,6 +112,9 @@ pub struct EditorApp {
     tab_overlay_texture: Option<egui::TextureHandle>,
     sotp_data: Option<Vec<u8>>,
     map_list: Option<MapList>,
+    prefab_assets: Vec<PrefabAsset>,
+    selected_prefab: Option<usize>,
+    prefab_search: String,
     hover_tile: (u16, u16),
     selected_tile: Option<(u16, u16)>,
     selected_ground_tile: u16,
@@ -55,8 +126,18 @@ pub struct EditorApp {
     shape_tool_start_tile: Option<(u16, u16)>,
     export_dialog: ExportDialog,
     new_map_size_dialog: MapSizeDialog,
+    pending_new_document_kind: DocumentKind,
+    asset_setup_dialog: AssetSetupDialog,
+    asset_import_task: Option<AssetImportTask>,
+    asset_load_task: Option<AssetLoadTask>,
     unsaved_changes_dialog: UnsavedChangesDialog,
     pending_unsaved_changes: Option<PendingUnsavedChanges>,
+    prefab_delete_dialog: PrefabDeleteDialog,
+    pending_prefab_deletion: Option<PendingPrefabDeletion>,
+    pending_prefab_rename: Option<PendingPrefabRename>,
+    prefab_rename_buffer: String,
+    prefab_rename_should_focus: bool,
+    allow_window_close: bool,
     status_message: String,
     atlas_needs_upload: bool,
     wall_atlas_needs_upload: bool,
@@ -68,21 +149,11 @@ impl EditorApp {
         crate::widgets::icons::install_font(&cc.egui_ctx);
         theme::apply_theme(&cc.egui_ctx);
 
-        // Build atlases CPU-side; texture uploads are deferred to first frame
-        // because the renderer hasn't reported the real GPU max texture size yet.
-        let (tile_atlas, wall_atlas, sotp_data) = Self::load_assets();
+        let needs_asset_setup = Self::assets_dir_missing_or_empty();
         let map_list = MapList::load_if_exists("maps.ron");
-        let selected_ground_tile = if tile_atlas.is_some() { 1 } else { 0 };
-        let selected_wall_tile = wall_atlas
-            .as_ref()
-            .and_then(|atlas| {
-                (1..atlas.sprite_count())
-                    .find(|&id| atlas.sprite_rect(id).is_some())
-                    .map(|id| id.min(u16::MAX as u32) as u16)
-            })
-            .unwrap_or(0);
-
-        Self {
+        let prefab_assets = prefab::load_prefab_assets().unwrap_or_default();
+        let selected_prefab = (!prefab_assets.is_empty()).then_some(0);
+        let mut app = Self {
             documents: vec![MapDocument::new(50, 50)],
             active_tab: 0,
             active_tool: Tool::Pencil,
@@ -94,19 +165,22 @@ impl EditorApp {
             layer_visibility: LayerVisibility::default(),
             show_grid: true,
             show_collision_overlay: false,
-            atlas_needs_upload: tile_atlas.is_some(),
-            wall_atlas_needs_upload: wall_atlas.is_some(),
-            tile_atlas,
-            wall_atlas,
-            sotp_data,
+            atlas_needs_upload: false,
+            wall_atlas_needs_upload: false,
+            tile_atlas: None,
+            wall_atlas: None,
+            sotp_data: None,
             map_list,
+            prefab_assets,
+            selected_prefab,
+            prefab_search: String::new(),
             atlas_texture: None,
             wall_texture: None,
             tab_overlay_texture: None,
             hover_tile: (0, 0),
             selected_tile: None,
-            selected_ground_tile,
-            selected_wall_tile,
+            selected_ground_tile: 0,
+            selected_wall_tile: 0,
             reveal_ground_tile_in_palette: None,
             reveal_wall_tile_in_palette: None,
             last_pencil_click_tile: None,
@@ -114,11 +188,37 @@ impl EditorApp {
             shape_tool_start_tile: None,
             export_dialog: ExportDialog::default(),
             new_map_size_dialog: MapSizeDialog::default(),
+            pending_new_document_kind: DocumentKind::Map,
+            asset_setup_dialog: {
+                let mut dialog = AssetSetupDialog::default();
+                if needs_asset_setup {
+                    dialog.open();
+                }
+                dialog
+            },
+            asset_import_task: None,
+            asset_load_task: None,
             unsaved_changes_dialog: UnsavedChangesDialog::default(),
             pending_unsaved_changes: None,
-            status_message: String::from("Ready"),
+            prefab_delete_dialog: PrefabDeleteDialog::default(),
+            pending_prefab_deletion: None,
+            pending_prefab_rename: None,
+            prefab_rename_buffer: String::new(),
+            prefab_rename_should_focus: false,
+            allow_window_close: false,
+            status_message: if needs_asset_setup {
+                String::from(ASSET_SETUP_PROMPT_STATUS)
+            } else {
+                format!("Loading Dark Ages assets... 0/{ASSET_LOAD_STAGE_COUNT}")
+            },
             tab_overlay_texture_needs_upload: true,
+        };
+
+        if !needs_asset_setup {
+            app.start_asset_loading();
         }
+
+        app
     }
 
     fn clear_edit_anchors(&mut self) {
@@ -131,6 +231,51 @@ impl EditorApp {
         self.map_list
             .as_ref()
             .and_then(|map_list| map_list.hint_for_path(path))
+    }
+
+    fn reload_prefabs(&mut self) {
+        let selected_path = self
+            .selected_prefab
+            .and_then(|index| self.prefab_assets.get(index))
+            .map(|prefab| prefab.path.clone());
+
+        match prefab::load_prefab_assets() {
+            Ok(prefabs) => {
+                self.prefab_assets = prefabs;
+                self.selected_prefab = selected_path
+                    .as_ref()
+                    .and_then(|path| {
+                        self.prefab_assets
+                            .iter()
+                            .position(|prefab| &prefab.path == path)
+                    })
+                    .or_else(|| (!self.prefab_assets.is_empty()).then_some(0));
+            }
+            Err(error) => {
+                warn!("Failed to reload prefabs: {}", error);
+                self.status_message = format!("Prefab reload failed: {}", error);
+            }
+        }
+    }
+
+    fn select_prefab_by_path(&mut self, path: &std::path::Path) {
+        self.selected_prefab = self
+            .prefab_assets
+            .iter()
+            .position(|prefab| prefab.path == path);
+    }
+
+    fn selected_prefab_map(&self) -> Option<&map::Map> {
+        self.selected_prefab
+            .and_then(|index| self.prefab_assets.get(index))
+            .map(|prefab| &prefab.map)
+    }
+
+    fn renaming_prefab_index(&self) -> Option<usize> {
+        let pending = self.pending_prefab_rename.as_ref()?;
+        self.prefab_assets
+            .iter()
+            .position(|prefab| Self::paths_match(&prefab.path, &pending.path))
     }
 
     fn set_active_tool(&mut self, tool: Tool) {
@@ -151,6 +296,11 @@ impl EditorApp {
         }
         self.active_paint_layer = layer;
         self.clear_edit_anchors();
+    }
+
+    fn enter_prefab_edit_mode(&mut self) {
+        self.set_active_tool(Tool::Pencil);
+        self.set_active_paint_layer(self.last_wall_paint_layer);
     }
 
     fn selected_tile_for_layer(&self, layer: PaintLayer) -> u16 {
@@ -180,26 +330,55 @@ impl EditorApp {
         })
     }
 
-    /// Load all assets from the archive: tile atlas, wall sprite atlas, and SOTP collision data.
-    fn load_assets() -> (
-        Option<render::TileAtlas>,
-        Option<render::SpriteAtlas>,
-        Option<Vec<u8>>,
-    ) {
+    fn is_dat_file(path: &Path) -> bool {
+        path.is_file()
+            && path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("dat"))
+                .unwrap_or(false)
+    }
+
+    fn assets_dir_missing_or_empty() -> bool {
         let assets_dir = PathBuf::from("assets");
+        let Ok(entries) = fs::read_dir(assets_dir) else {
+            return true;
+        };
+
+        !entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .any(|path| Self::is_dat_file(&path))
+    }
+
+    /// Load all assets from the archive: tile atlas, wall sprite atlas, and SOTP collision data.
+    fn load_assets_with_progress<F>(mut progress: F) -> Result<LoadedAssets, String>
+    where
+        F: FnMut(String, usize, usize),
+    {
+        let assets_dir = PathBuf::from("assets");
+        progress(
+            "Loading assets: archives (1/5)".to_string(),
+            0,
+            ASSET_LOAD_STAGE_COUNT,
+        );
 
         let pool = match archive::AssetPool::load(&assets_dir) {
             Ok(pool) => pool,
             Err(e) => {
-                warn!(
+                return Err(format!(
                     "Could not load asset archives from {}: {}",
                     assets_dir.display(),
                     e
-                );
-                return (None, None, None);
+                ));
             }
         };
 
+        progress(
+            "Loading assets: palettes (2/5)".to_string(),
+            1,
+            ASSET_LOAD_STAGE_COUNT,
+        );
         let legacy_palette = match Self::get_pool_asset_case_insensitive(&pool, "legend.pal") {
             Some(data) => match render::Palette::from_bytes(data) {
                 Ok(p) => Some(p),
@@ -231,14 +410,96 @@ impl EditorApp {
             );
         }
 
-        // Ground tile atlas
-        let tile_atlas = match Self::get_pool_asset_case_insensitive(&pool, "TILEA.BMP") {
+        progress(
+            "Loading assets: tile and wall atlases (3/5)".to_string(),
+            2,
+            ASSET_LOAD_STAGE_COUNT,
+        );
+        let (tile_atlas, wall_atlas) = std::thread::scope(|scope| {
+            let pool = &pool;
+            let legacy_palette = legacy_palette.as_ref();
+            let ground_palette_lookup = ground_palette_lookup.as_ref();
+            let wall_palette_lookup = wall_palette_lookup.as_ref();
+            let (sender, receiver) = mpsc::channel();
+
+            let tile_sender = sender.clone();
+            scope.spawn(move || {
+                let atlas = Self::build_tile_atlas(pool, legacy_palette, ground_palette_lookup);
+                let _ = tile_sender.send(AtlasBuildResult::Tile(atlas));
+            });
+
+            scope.spawn(move || {
+                let atlas =
+                    Self::build_wall_sprite_atlas(pool, legacy_palette, wall_palette_lookup);
+                let _ = sender.send(AtlasBuildResult::Wall(atlas));
+            });
+
+            let mut tile_atlas = None;
+            let mut wall_atlas = None;
+            let mut tile_finished = false;
+            let mut wall_finished = false;
+
+            for _ in 0..2 {
+                match receiver.recv() {
+                    Ok(AtlasBuildResult::Tile(atlas)) => {
+                        tile_atlas = atlas;
+                        tile_finished = true;
+                        if !wall_finished {
+                            progress(
+                                "Loading assets: wall atlas (4/5)".to_string(),
+                                3,
+                                ASSET_LOAD_STAGE_COUNT,
+                            );
+                        }
+                    }
+                    Ok(AtlasBuildResult::Wall(atlas)) => {
+                        wall_atlas = atlas;
+                        wall_finished = true;
+                        if !tile_finished {
+                            progress(
+                                "Loading assets: tile atlas (4/5)".to_string(),
+                                3,
+                                ASSET_LOAD_STAGE_COUNT,
+                            );
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+
+            (tile_atlas, wall_atlas)
+        });
+
+        // SOTP collision data
+        progress(
+            "Loading assets: collision data (5/5)".to_string(),
+            4,
+            ASSET_LOAD_STAGE_COUNT,
+        );
+        let sotp_data = Self::get_pool_asset_case_insensitive(&pool, "SOTP.DAT").map(|data| {
+            info!("Loaded SOTP.DAT ({} bytes)", data.len());
+            data.to_vec()
+        });
+        if sotp_data.is_none() {
+            warn!("SOTP.DAT not found in asset archives");
+        }
+
+        Ok(LoadedAssets {
+            tile_atlas,
+            wall_atlas,
+            sotp_data,
+        })
+    }
+
+    fn build_tile_atlas(
+        pool: &archive::AssetPool,
+        legacy_palette: Option<&render::Palette>,
+        ground_palette_lookup: Option<&LoadedPaletteLookup>,
+    ) -> Option<render::TileAtlas> {
+        match Self::get_pool_asset_case_insensitive(pool, "TILEA.BMP") {
             Some(tile_data) => {
-                let atlas_result = if let Some(lookup) = ground_palette_lookup.as_ref() {
-                    match legacy_palette
-                        .as_ref()
-                        .or_else(|| lookup.fallback_palette())
-                    {
+                let atlas_result = if let Some(lookup) = ground_palette_lookup {
+                    match legacy_palette.or_else(|| lookup.fallback_palette()) {
                         Some(default_palette) => {
                             info!("Rendering TILEA.BMP using mpt palette-table mode");
                             Some(render::TileAtlas::from_raw_with_tile_palette(
@@ -257,7 +518,7 @@ impl EditorApp {
                             None
                         }
                     }
-                } else if let Some(palette) = legacy_palette.as_ref() {
+                } else if let Some(palette) = legacy_palette {
                     info!("Rendering TILEA.BMP using legacy legend palette");
                     Some(render::TileAtlas::from_raw(tile_data, palette, 56, 27))
                 } else {
@@ -276,8 +537,8 @@ impl EditorApp {
                         );
                         Some(atlas)
                     }
-                    Some(Err(e)) => {
-                        warn!("Failed to build tile atlas: {}", e);
+                    Some(Err(error)) => {
+                        warn!("Failed to build tile atlas: {}", error);
                         None
                     }
                     None => None,
@@ -287,17 +548,19 @@ impl EditorApp {
                 warn!("TILEA.BMP not found in asset archives");
                 None
             }
-        };
+        }
+    }
 
-        // Wall sprite atlas from HPF files
-        let wall_atlas = if let Some(lookup) = wall_palette_lookup.as_ref() {
-            match legacy_palette
-                .as_ref()
-                .or_else(|| lookup.fallback_palette())
-            {
+    fn build_wall_sprite_atlas(
+        pool: &archive::AssetPool,
+        legacy_palette: Option<&render::Palette>,
+        wall_palette_lookup: Option<&LoadedPaletteLookup>,
+    ) -> Option<render::SpriteAtlas> {
+        if let Some(lookup) = wall_palette_lookup {
+            match legacy_palette.or_else(|| lookup.fallback_palette()) {
                 Some(default_palette) => {
                     info!("Rendering STC wall sprites using stc palette-table mode");
-                    Self::load_wall_atlas(&pool, |wall_id| {
+                    Self::load_wall_atlas(pool, |wall_id| {
                         lookup
                             .palette_for_id(wall_id + 1)
                             .unwrap_or(default_palette)
@@ -308,24 +571,310 @@ impl EditorApp {
                     None
                 }
             }
-        } else if let Some(palette) = legacy_palette.as_ref() {
+        } else if let Some(palette) = legacy_palette {
             info!("Rendering STC wall sprites using legacy legend palette");
-            Self::load_wall_atlas(&pool, |_| palette)
+            Self::load_wall_atlas(pool, |_| palette)
         } else {
             warn!("No usable palette found for STC wall sprite rendering");
             None
-        };
+        }
+    }
 
-        // SOTP collision data
-        let sotp_data = Self::get_pool_asset_case_insensitive(&pool, "SOTP.DAT").map(|data| {
-            info!("Loaded SOTP.DAT ({} bytes)", data.len());
-            data.to_vec()
-        });
-        if sotp_data.is_none() {
-            warn!("SOTP.DAT not found in asset archives");
+    fn default_wall_tile_selection(wall_atlas: Option<&render::SpriteAtlas>) -> u16 {
+        wall_atlas
+            .and_then(|atlas| {
+                (1..atlas.sprite_count())
+                    .find(|&id| atlas.sprite_rect(id).is_some())
+                    .map(|id| id.min(u16::MAX as u32) as u16)
+            })
+            .unwrap_or(0)
+    }
+
+    fn apply_loaded_assets(&mut self, assets: LoadedAssets) {
+        self.atlas_needs_upload = assets.tile_atlas.is_some();
+        self.wall_atlas_needs_upload = assets.wall_atlas.is_some();
+        self.tile_atlas = assets.tile_atlas;
+        self.wall_atlas = assets.wall_atlas;
+        self.sotp_data = assets.sotp_data;
+        self.atlas_texture = None;
+        self.wall_texture = None;
+
+        if self.selected_ground_tile == 0 && self.tile_atlas.is_some() {
+            self.selected_ground_tile = 1;
+        }
+        if self.selected_wall_tile == 0 {
+            self.selected_wall_tile = Self::default_wall_tile_selection(self.wall_atlas.as_ref());
+        }
+        if self.sotp_data.is_none() {
+            self.show_collision_overlay = false;
+        }
+    }
+
+    fn start_asset_loading(&mut self) {
+        if self.asset_load_task.is_some() {
+            return;
         }
 
-        (tile_atlas, wall_atlas, sotp_data)
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let send_progress = |message: String, completed_steps: usize, total_steps: usize| {
+                let _ = sender.send(AssetLoadProgressEvent::Status {
+                    message,
+                    completed_steps,
+                    total_steps,
+                });
+            };
+
+            match Self::load_assets_with_progress(send_progress) {
+                Ok(assets) => {
+                    let _ = sender.send(AssetLoadProgressEvent::Finished(assets));
+                }
+                Err(error) => {
+                    let _ = sender.send(AssetLoadProgressEvent::Failed(error));
+                }
+            }
+        });
+
+        self.asset_load_task = Some(AssetLoadTask {
+            receiver,
+            completed_steps: 0,
+            total_steps: ASSET_LOAD_STAGE_COUNT,
+        });
+    }
+
+    fn open_asset_setup_prompt(&mut self) {
+        self.asset_setup_dialog.open();
+        self.status_message = String::from(ASSET_SETUP_PROMPT_STATUS);
+    }
+
+    fn poll_asset_load_progress(&mut self, ctx: &egui::Context) {
+        let mut completion = None;
+
+        if let Some(task) = self.asset_load_task.as_mut() {
+            while let Ok(event) = task.receiver.try_recv() {
+                match event {
+                    AssetLoadProgressEvent::Status {
+                        message,
+                        completed_steps,
+                        total_steps,
+                    } => {
+                        task.completed_steps = completed_steps;
+                        task.total_steps = total_steps;
+                        self.status_message = message;
+                    }
+                    AssetLoadProgressEvent::Finished(assets) => {
+                        completion = Some(Ok(assets));
+                    }
+                    AssetLoadProgressEvent::Failed(error) => {
+                        completion = Some(Err(error));
+                    }
+                }
+            }
+            ctx.request_repaint();
+        }
+
+        let Some(result) = completion else {
+            return;
+        };
+
+        self.asset_load_task = None;
+        match result {
+            Ok(assets) => {
+                let has_any_assets = assets.tile_atlas.is_some()
+                    || assets.wall_atlas.is_some()
+                    || assets.sotp_data.is_some();
+                self.apply_loaded_assets(assets);
+                if has_any_assets {
+                    self.status_message = String::from("Assets loaded.");
+                } else {
+                    self.open_asset_setup_prompt();
+                }
+            }
+            Err(error) => {
+                warn!("Asset load failed: {}", error);
+                self.open_asset_setup_prompt();
+            }
+        }
+    }
+
+    fn start_dark_ages_asset_import(&mut self, source_dir: &Path) -> Result<(), String> {
+        let entries = fs::read_dir(source_dir).map_err(|error| {
+            format!(
+                "Could not read Dark Ages folder {}: {}",
+                source_dir.display(),
+                error
+            )
+        })?;
+
+        let assets_dir = PathBuf::from("assets");
+        fs::create_dir_all(&assets_dir)
+            .map_err(|error| format!("Could not create {}: {}", assets_dir.display(), error))?;
+
+        let mut jobs = Vec::new();
+        for entry in entries.filter_map(Result::ok) {
+            let source_path = entry.path();
+            if !Self::is_dat_file(&source_path) {
+                continue;
+            }
+
+            let Some(file_name) = source_path.file_name().map(|name| name.to_os_string()) else {
+                continue;
+            };
+            jobs.push((source_path, assets_dir.join(file_name)));
+        }
+
+        if jobs.is_empty() {
+            return Err(format!(
+                "No .dat files were found in {}. Select the Dark Ages install folder that contains the game archives.",
+                source_dir.display()
+            ));
+        }
+
+        let total = jobs.len();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut copied = 0usize;
+            for (source_path, destination) in jobs {
+                let file_name = source_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("archive.dat")
+                    .to_string();
+
+                let copy_result = if Self::paths_match(&source_path, &destination) {
+                    Ok(0)
+                } else {
+                    fs::copy(&source_path, &destination)
+                };
+
+                if let Err(error) = copy_result {
+                    let _ = sender.send(AssetImportProgressEvent::Failed {
+                        error: format!(
+                            "Failed to copy {} into {}: {}",
+                            source_path.display(),
+                            destination.display(),
+                            error
+                        ),
+                    });
+                    return;
+                }
+
+                copied += 1;
+                let _ = sender.send(AssetImportProgressEvent::Progress {
+                    copied,
+                    total,
+                    file_name,
+                });
+            }
+
+            let _ = sender.send(AssetImportProgressEvent::Finished { copied });
+        });
+
+        self.asset_import_task = Some(AssetImportTask {
+            receiver,
+            copied: 0,
+            total,
+            current_file: None,
+            just_started: true,
+        });
+        self.status_message = String::from("Importing Dark Ages assets...");
+        Ok(())
+    }
+
+    fn poll_asset_import_progress(&mut self, ctx: &egui::Context) {
+        let mut completion = None;
+
+        if let Some(task) = self.asset_import_task.as_mut() {
+            if task.just_started {
+                task.just_started = false;
+                ctx.request_repaint();
+                return;
+            }
+
+            while let Ok(event) = task.receiver.try_recv() {
+                match event {
+                    AssetImportProgressEvent::Progress {
+                        copied,
+                        total,
+                        file_name,
+                    } => {
+                        task.copied = copied;
+                        task.total = total;
+                        task.current_file = Some(file_name);
+                        self.status_message =
+                            format!("Importing Dark Ages assets... {copied}/{total}");
+                    }
+                    AssetImportProgressEvent::Finished { copied } => {
+                        completion = Some(Ok(copied));
+                    }
+                    AssetImportProgressEvent::Failed { error } => {
+                        completion = Some(Err(error));
+                    }
+                }
+            }
+            ctx.request_repaint();
+        }
+
+        let Some(result) = completion else {
+            return;
+        };
+
+        self.asset_import_task = None;
+        match result {
+            Ok(copied) => {
+                self.status_message = format!(
+                    "Imported {} Dark Ages .dat files. Loading assets...",
+                    copied
+                );
+                self.start_asset_loading();
+            }
+            Err(error) => {
+                warn!("Asset import failed: {}", error);
+                self.open_asset_setup_prompt();
+            }
+        }
+    }
+
+    fn resolve_asset_setup_action(&mut self, action: AssetSetupDialogAction) {
+        match action {
+            AssetSetupDialogAction::None => {}
+            AssetSetupDialogAction::NotNow => {
+                self.status_message = String::from(
+                    "Dark Ages assets are missing. Copy the game's .dat files into assets/ to render tiles, walls, and collision data.",
+                );
+            }
+            AssetSetupDialogAction::SelectFolder => {
+                let folder = rfd::FileDialog::new()
+                    .set_title("Select Dark Ages Folder")
+                    .pick_folder();
+
+                let Some(folder) = folder else {
+                    self.open_asset_setup_prompt();
+                    return;
+                };
+
+                self.asset_setup_dialog.close();
+                match self.start_dark_ages_asset_import(&folder) {
+                    Ok(()) => {}
+                    Err(error) => {
+                        warn!("Asset import failed: {}", error);
+                        self.open_asset_setup_prompt();
+                    }
+                }
+            }
+        }
+    }
+
+    fn status_progress(&self) -> Option<f32> {
+        if let Some(task) = self.asset_import_task.as_ref() {
+            let total = task.total.max(1);
+            return Some((task.copied as f32 / total as f32).clamp(0.0, 1.0));
+        }
+
+        self.asset_load_task.as_ref().map(|task| {
+            let total = task.total_steps.max(1);
+            (task.completed_steps as f32 / total as f32).clamp(0.0, 1.0)
+        })
     }
 
     /// Probe for `stcNNNNN.hpf` files in the asset pool, decode them, and
@@ -486,10 +1035,25 @@ impl EditorApp {
         self.tab_overlay_texture = Some(texture);
     }
 
-    fn new_document(&mut self) {
+    fn open_new_document_dialog(&mut self, kind: DocumentKind) {
         self.documents[self.active_tab].finish_stroke();
-        let map = &self.documents[self.active_tab].map;
-        self.new_map_size_dialog.open(map.width, map.height);
+        self.pending_new_document_kind = kind;
+        let (width, height) = match kind {
+            DocumentKind::Map => {
+                let map = &self.documents[self.active_tab].map;
+                (map.width, map.height)
+            }
+            DocumentKind::Prefab => (6, 6),
+        };
+        self.new_map_size_dialog.open(width, height);
+    }
+
+    fn new_document(&mut self) {
+        self.open_new_document_dialog(DocumentKind::Map);
+    }
+
+    fn new_prefab_document(&mut self) {
+        self.open_new_document_dialog(DocumentKind::Prefab);
     }
 
     fn create_document_with_dimensions(&mut self, width: u16, height: u16) {
@@ -497,49 +1061,438 @@ impl EditorApp {
             self.status_message = "Width and height must both be at least 1.".to_string();
             return;
         }
-        self.documents.push(MapDocument::new(width, height));
+        let kind = self.pending_new_document_kind;
+        let document = match kind {
+            DocumentKind::Map => MapDocument::new_map(width, height),
+            DocumentKind::Prefab => MapDocument::new_prefab(width, height),
+        };
+        self.documents.push(document);
         self.active_tab = self.documents.len() - 1;
         self.clear_edit_anchors();
-        self.status_message = format!("Created new map {}x{}", width, height);
+        self.status_message = format!("Created new {} {}x{}", kind.noun(), width, height);
     }
 
     fn open_document(&mut self) {
+        self.open_map_document();
+    }
+
+    fn open_map_document(&mut self) {
         self.documents[self.active_tab].finish_stroke();
         let file = rfd::FileDialog::new()
             .add_filter("Map", &["map"])
             .pick_file();
 
         if let Some(path) = file {
-            // Check if already open — just switch to it
-            for (i, doc) in self.documents.iter().enumerate() {
-                if doc.path.as_ref() == Some(&path) {
-                    self.active_tab = i;
-                    self.clear_edit_anchors();
-                    return;
+            self.open_document_from_path(path);
+        }
+    }
+
+    fn open_document_from_path(&mut self, path: PathBuf) {
+        for (i, doc) in self.documents.iter().enumerate() {
+            if doc.path.as_ref() == Some(&path) {
+                self.active_tab = i;
+                self.clear_edit_anchors();
+                if path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext.eq_ignore_ascii_case("ron"))
+                    .unwrap_or(false)
+                {
+                    self.reload_prefabs();
+                    self.select_prefab_by_path(&path);
+                    self.enter_prefab_edit_mode();
+                }
+                return;
+            }
+        }
+
+        let ext = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+        let opened = if ext.eq_ignore_ascii_case("map") {
+            let hint = self.map_hint_for_path(&path);
+            MapDocument::open_map(path.clone(), hint)
+        } else if ext.eq_ignore_ascii_case("ron") {
+            MapDocument::open_prefab(path.clone())
+        } else {
+            return;
+        };
+
+        match opened {
+            Ok(doc) => {
+                let kind = doc.kind();
+                self.documents.push(doc);
+                self.active_tab = self.documents.len() - 1;
+                self.clear_edit_anchors();
+                if kind == DocumentKind::Prefab {
+                    self.reload_prefabs();
+                    self.select_prefab_by_path(&path);
+                    self.enter_prefab_edit_mode();
+                }
+                info!("Opened {}: {}", kind.noun(), path.display());
+                self.status_message = format!(
+                    "Opened {}.",
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or(kind.noun())
+                );
+            }
+            Err(error) => {
+                warn!("Failed to open {}: {}", path.display(), error);
+                self.status_message = format!("Open failed: {}", error);
+            }
+        }
+    }
+
+    fn import_prefab_into_registry(&mut self) {
+        self.documents[self.active_tab].finish_stroke();
+        let file = rfd::FileDialog::new()
+            .add_filter("Prefab", &["ron"])
+            .pick_file();
+
+        let Some(source_path) = file else {
+            return;
+        };
+
+        if let Err(error) = prefab::load_prefab_asset(&source_path) {
+            self.status_message = format!("Import failed: {}", error);
+            return;
+        }
+
+        let prefabs_dir =
+            prefab::ensure_prefabs_dir().unwrap_or_else(|_| PathBuf::from(prefab::PREFABS_DIR));
+        let filename = source_path
+            .file_name()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("imported-prefab.ron"));
+        let destination = prefabs_dir.join(filename);
+
+        let same_file = Self::paths_match(&source_path, &destination);
+        if !same_file {
+            if let Err(error) = fs::copy(&source_path, &destination) {
+                self.status_message = format!("Import failed: {}", error);
+                return;
+            }
+        }
+
+        self.reload_prefabs();
+        self.select_prefab_by_path(&destination);
+        self.status_message = format!(
+            "Imported prefab {}.",
+            destination
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("prefab")
+        );
+    }
+
+    fn paths_match(a: &Path, b: &Path) -> bool {
+        if a == b {
+            return true;
+        }
+
+        match (a.canonicalize(), b.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+    }
+
+    fn handle_inspector_response(&mut self, response: InspectorResponse) {
+        if let Some(index) = response
+            .select_prefab_index
+            .filter(|index| *index < self.prefab_assets.len())
+        {
+            self.selected_prefab = Some(index);
+        }
+        if response.new_prefab_requested {
+            self.new_prefab_document();
+        }
+        if response.import_prefab_requested {
+            self.import_prefab_into_registry();
+        }
+        if let Some(index) = response
+            .edit_prefab_index
+            .filter(|index| *index < self.prefab_assets.len())
+        {
+            if let Some(prefab) = self.prefab_assets.get(index) {
+                self.open_document_from_path(prefab.path.clone());
+            }
+        }
+        if let Some(index) = response
+            .duplicate_prefab_index
+            .filter(|index| *index < self.prefab_assets.len())
+        {
+            match self.duplicate_prefab(index) {
+                Ok(path) => {
+                    let duplicated_to = path
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .unwrap_or("prefab");
+                    self.status_message = format!("Duplicated prefab to {}.", duplicated_to);
+                }
+                Err(error) => {
+                    self.status_message = error;
                 }
             }
+        }
+        if let Some(index) = response
+            .start_rename_prefab_index
+            .filter(|index| *index < self.prefab_assets.len())
+        {
+            self.begin_prefab_rename_flow(index);
+        }
+        if response.submit_prefab_rename {
+            self.commit_prefab_rename();
+        }
+        if response.cancel_prefab_rename {
+            self.cancel_prefab_rename();
+        }
+        if let Some(index) = response
+            .delete_prefab_index
+            .filter(|index| *index < self.prefab_assets.len())
+        {
+            self.begin_prefab_delete_flow(index);
+        }
+    }
 
-            let hint = self.map_hint_for_path(&path);
-            match MapDocument::open(path.clone(), hint) {
-                Ok(doc) => {
-                    self.documents.push(doc);
-                    self.active_tab = self.documents.len() - 1;
-                    self.clear_edit_anchors();
-                    info!("Opened map: {}", path.display());
-                }
-                Err(e) => {
-                    warn!("Failed to open {}: {}", path.display(), e);
+    fn begin_prefab_rename_flow(&mut self, index: usize) {
+        let Some(prefab) = self.prefab_assets.get(index) else {
+            return;
+        };
+
+        self.pending_prefab_rename = Some(PendingPrefabRename {
+            path: prefab.path.clone(),
+        });
+        self.prefab_rename_buffer = prefab.file_stem_name().to_string();
+        self.prefab_rename_should_focus = true;
+    }
+
+    fn cancel_prefab_rename(&mut self) {
+        self.pending_prefab_rename = None;
+        self.prefab_rename_buffer.clear();
+        self.prefab_rename_should_focus = false;
+    }
+
+    fn commit_prefab_rename(&mut self) {
+        let Some(pending) = self.pending_prefab_rename.as_ref() else {
+            return;
+        };
+
+        let source_path = pending.path.clone();
+        let requested_name = self.prefab_rename_buffer.clone();
+        let sanitized_name = prefab::sanitize_prefab_name(&requested_name);
+        if Self::prefab_name_conflicts(&self.prefab_assets, &source_path, &sanitized_name) {
+            self.status_message = format!("A prefab named {} already exists.", sanitized_name);
+            self.cancel_prefab_rename();
+            return;
+        }
+
+        match self.rename_prefab(&source_path, &requested_name) {
+            Ok(path) => {
+                let renamed_to = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("prefab");
+                self.status_message = format!("Renamed prefab to {}.", renamed_to);
+                self.cancel_prefab_rename();
+            }
+            Err(error) => {
+                self.status_message = error;
+                self.prefab_rename_should_focus = true;
+            }
+        }
+    }
+
+    fn begin_prefab_delete_flow(&mut self, index: usize) {
+        let Some(prefab) = self.prefab_assets.get(index) else {
+            return;
+        };
+        let prefab_path = prefab.path.clone();
+        let name = prefab.file_stem_name().to_string();
+
+        if self
+            .pending_prefab_rename
+            .as_ref()
+            .map(|pending| Self::paths_match(&pending.path, &prefab_path))
+            .unwrap_or(false)
+        {
+            self.cancel_prefab_rename();
+        }
+
+        self.prefab_delete_dialog.open_for(&name);
+        self.pending_prefab_deletion = Some(PendingPrefabDeletion {
+            path: prefab_path,
+            name,
+        });
+    }
+
+    fn resolve_prefab_delete_action(&mut self, action: PrefabDeleteDialogAction) {
+        match action {
+            PrefabDeleteDialogAction::None => {}
+            PrefabDeleteDialogAction::Cancel => {
+                self.pending_prefab_deletion = None;
+            }
+            PrefabDeleteDialogAction::Delete => {
+                let Some(pending) = self.pending_prefab_deletion.take() else {
+                    return;
+                };
+                match self.delete_prefab(&pending.path, &pending.name) {
+                    Ok(()) => {
+                        self.status_message = format!("Deleted prefab {}.", pending.name);
+                    }
+                    Err(error) => {
+                        self.status_message = error;
+                    }
                 }
             }
         }
     }
 
-    fn save_document_at(&mut self, index: usize) -> bool {
+    fn delete_prefab(&mut self, path: &Path, name: &str) -> Result<(), String> {
+        let mut open_indices = Vec::new();
+        for (index, doc) in self.documents.iter().enumerate() {
+            let Some(doc_path) = doc.path.as_ref() else {
+                continue;
+            };
+            if !Self::paths_match(doc_path, path) {
+                continue;
+            }
+            if doc.dirty {
+                return Err(format!(
+                    "Close or save open prefab tabs for {} before deleting it.",
+                    name
+                ));
+            }
+            open_indices.push(index);
+        }
+
+        for index in open_indices.into_iter().rev() {
+            self.close_tab_now(index);
+        }
+
+        fs::remove_file(path)
+            .map_err(|error| format!("Delete failed for {}: {}", path.display(), error))?;
+        self.reload_prefabs();
+        Ok(())
+    }
+
+    fn duplicate_prefab(&mut self, index: usize) -> Result<PathBuf, String> {
+        let Some(prefab) = self.prefab_assets.get(index) else {
+            return Err("Could not find prefab to duplicate.".to_string());
+        };
+
+        for doc in &self.documents {
+            let Some(doc_path) = doc.path.as_ref() else {
+                continue;
+            };
+            if Self::paths_match(doc_path, &prefab.path) && doc.dirty {
+                return Err(format!(
+                    "Save open prefab tabs for {} before duplicating it.",
+                    prefab.file_stem_name()
+                ));
+            }
+        }
+
+        let duplicate_name =
+            Self::next_duplicate_prefab_name(&self.prefab_assets, prefab.file_stem_name());
+        let prefabs_dir = prefab::ensure_prefabs_dir()
+            .map_err(|error| format!("Could not access prefabs/: {}", error))?;
+        let destination = prefabs_dir.join(format!("{duplicate_name}.ron"));
+
+        let mut prefab_file = prefab::PrefabFile::load(&prefab.path)
+            .map_err(|error| format!("Could not duplicate {}: {}", prefab.path.display(), error))?;
+        prefab_file.name = Some(duplicate_name.clone());
+        prefab_file.save(&destination).map_err(|error| {
+            format!(
+                "Could not write duplicate {}: {}",
+                destination.display(),
+                error
+            )
+        })?;
+
+        self.reload_prefabs();
+        self.select_prefab_by_path(&destination);
+        Ok(destination)
+    }
+
+    fn rename_prefab(&mut self, path: &Path, requested_name: &str) -> Result<PathBuf, String> {
+        let sanitized_name = prefab::sanitize_prefab_name(requested_name);
+        if sanitized_name.is_empty() {
+            return Err("Prefab name must contain at least one letter or number.".to_string());
+        }
+        if Self::prefab_name_conflicts(&self.prefab_assets, path, &sanitized_name) {
+            return Err(format!("A prefab named {} already exists.", sanitized_name));
+        }
+
+        let prefabs_dir = prefab::ensure_prefabs_dir()
+            .map_err(|error| format!("Could not access prefabs/: {}", error))?;
+        let destination = prefabs_dir.join(format!("{sanitized_name}.ron"));
+        if !Self::paths_match(path, &destination) {
+            fs::rename(path, &destination).map_err(|error| {
+                format!(
+                    "Rename failed for {} -> {}: {}",
+                    path.display(),
+                    destination.display(),
+                    error
+                )
+            })?;
+        }
+
+        self.update_open_prefab_paths(path, &destination);
+        self.reload_prefabs();
+        self.select_prefab_by_path(&destination);
+        Ok(destination)
+    }
+
+    fn update_open_prefab_paths(&mut self, old_path: &Path, new_path: &Path) {
+        for doc in &mut self.documents {
+            let Some(doc_path) = doc.path.as_ref() else {
+                continue;
+            };
+            if !Self::paths_match(doc_path, old_path) {
+                continue;
+            }
+            doc.update_prefab_path(new_path.to_path_buf());
+        }
+    }
+
+    fn prefab_name_conflicts(
+        prefabs: &[PrefabAsset],
+        current_path: &Path,
+        candidate_name: &str,
+    ) -> bool {
+        prefabs.iter().any(|prefab| {
+            !Self::paths_match(&prefab.path, current_path)
+                && prefab.file_stem_name().eq_ignore_ascii_case(candidate_name)
+        })
+    }
+
+    fn next_duplicate_prefab_name(prefabs: &[PrefabAsset], base_name: &str) -> String {
+        let mut suffix = 1usize;
+        loop {
+            let candidate = format!("{base_name}_{suffix}");
+            if !prefabs
+                .iter()
+                .any(|prefab| prefab.file_stem_name().eq_ignore_ascii_case(&candidate))
+            {
+                return candidate;
+            }
+            suffix += 1;
+        }
+    }
+
+    fn save_document_at(&mut self, index: usize, prompt_for_path: bool) -> bool {
         let Some(doc) = self.documents.get_mut(index) else {
             return false;
         };
         doc.finish_stroke();
-        let Some(path) = self.prompt_save_path_for_document(index) else {
+        let path = if prompt_for_path {
+            self.prompt_save_path_for_document(index)
+        } else {
+            self.documents[index]
+                .path
+                .clone()
+                .or_else(|| self.prompt_save_path_for_document(index))
+        };
+        let Some(path) = path else {
             return false;
         };
 
@@ -549,10 +1502,15 @@ impl EditorApp {
             .unwrap_or("map")
             .to_owned();
 
+        let kind = self.documents[index].kind();
         match self.documents[index].save_as(path.clone()) {
             Ok(()) => {
                 self.documents[index].clear_history();
-                info!("Saved map: {}", path.display());
+                if kind == DocumentKind::Prefab {
+                    self.reload_prefabs();
+                    self.select_prefab_by_path(&path);
+                }
+                info!("Saved {}: {}", kind.noun(), path.display());
                 self.status_message = format!("Saved {}.", filename);
                 true
             }
@@ -565,49 +1523,40 @@ impl EditorApp {
     }
 
     fn save_document(&mut self) {
-        let _ = self.save_document_at(self.active_tab);
+        let _ = self.save_document_at(self.active_tab, false);
     }
 
     fn save_document_as(&mut self) {
-        let _ = self.save_document_at(self.active_tab);
+        let _ = self.save_document_at(self.active_tab, true);
     }
 
     fn prompt_save_path_for_document(&self, index: usize) -> Option<PathBuf> {
         let doc = &self.documents[index];
-        let suggested = Self::suggested_map_filename(doc);
+        let suggested = doc.suggested_filename();
 
-        let mut dialog = rfd::FileDialog::new()
-            .add_filter("Map", &["map"])
-            .set_file_name(&suggested);
+        match doc.kind() {
+            DocumentKind::Map => {
+                let mut dialog = rfd::FileDialog::new()
+                    .add_filter("Map", &["map"])
+                    .set_file_name(&suggested);
 
-        if let Some(parent) = doc.path.as_ref().and_then(|p| p.parent()) {
-            dialog = dialog.set_directory(parent);
-        }
-
-        dialog.save_file().map(Self::ensure_map_extension)
-    }
-
-    fn suggested_map_filename(doc: &MapDocument) -> String {
-        let mut name = doc
-            .path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| {
-                let base = doc.display_name();
-                if base.eq_ignore_ascii_case("Untitled") {
-                    String::from("untitled.map")
-                } else {
-                    format!("{base}.map")
+                if let Some(parent) = doc.path.as_ref().and_then(|p| p.parent()) {
+                    dialog = dialog.set_directory(parent);
                 }
-            });
 
-        if !name.to_ascii_lowercase().ends_with(".map") {
-            name.push_str(".map");
+                dialog.save_file().map(Self::ensure_map_extension)
+            }
+            DocumentKind::Prefab => {
+                let directory = prefab::ensure_prefabs_dir()
+                    .unwrap_or_else(|_| PathBuf::from(prefab::PREFABS_DIR));
+                rfd::FileDialog::new()
+                    .add_filter("Prefab", &["ron"])
+                    .set_directory(directory)
+                    .set_file_name(&suggested)
+                    .save_file()
+                    .map(Self::ensure_prefab_save_path)
+            }
         }
-
-        name
     }
 
     fn ensure_map_extension(mut path: PathBuf) -> PathBuf {
@@ -618,6 +1567,28 @@ impl EditorApp {
             .unwrap_or(false);
         if !has_map_ext {
             path.set_extension("map");
+        }
+        path
+    }
+
+    fn ensure_prefab_save_path(mut path: PathBuf) -> PathBuf {
+        let prefabs_dir =
+            prefab::ensure_prefabs_dir().unwrap_or_else(|_| PathBuf::from(prefab::PREFABS_DIR));
+        if !path.starts_with(&prefabs_dir) {
+            let file_name = path
+                .file_name()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("untitled-prefab.ron"));
+            path = prefabs_dir.join(file_name);
+        }
+
+        let has_ron_ext = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("ron"))
+            .unwrap_or(false);
+        if !has_ron_ext {
+            path.set_extension("ron");
         }
         path
     }
@@ -653,11 +1624,7 @@ impl EditorApp {
         self.clear_edit_anchors();
     }
 
-    fn begin_unsaved_changes_flow(
-        &mut self,
-        action: PendingDiscardAction,
-        document_index: usize,
-    ) {
+    fn begin_unsaved_changes_flow(&mut self, action: PendingDiscardAction, document_index: usize) {
         let Some(doc) = self.documents.get(document_index) else {
             return;
         };
@@ -715,12 +1682,13 @@ impl EditorApp {
             UnsavedChangesDialogAction::None => {}
             UnsavedChangesDialogAction::Cancel => {
                 self.pending_unsaved_changes = None;
+                self.allow_window_close = false;
             }
             UnsavedChangesDialogAction::Save => {
                 let Some(pending) = self.pending_unsaved_changes.take() else {
                     return;
                 };
-                if self.save_document_at(pending.document_index) {
+                if self.save_document_at(pending.document_index, false) {
                     self.advance_pending_discard_action(ctx, pending);
                 }
             }
@@ -750,6 +1718,7 @@ impl EditorApp {
                         next_index,
                     );
                 } else {
+                    self.allow_window_close = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }
@@ -821,7 +1790,7 @@ impl EditorApp {
             return;
         }
 
-        let points = shape::outline_points(shape_kind, start, end);
+        let points = shape::paint_points(shape_kind, start, end);
         doc.begin_layer_stroke(layer, paint_value);
         for (x, y) in points {
             if x < 0 || y < 0 {
@@ -900,6 +1869,8 @@ impl EditorApp {
     }
 
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
+        let keyboard_captured =
+            ctx.wants_keyboard_input() || ctx.memory(|memory| memory.focused().is_some());
         let (
             new,
             open,
@@ -921,11 +1892,13 @@ impl EditorApp {
             let shift = i.modifiers.shift;
 
             // Tool shortcuts (no modifiers)
-            let tool = if !cmd && !shift {
+            let tool = if !keyboard_captured && !cmd && !shift {
                 if i.key_pressed(egui::Key::V) {
                     Some(Tool::Select)
                 } else if i.key_pressed(egui::Key::B) {
                     Some(Tool::Pencil)
+                } else if i.key_pressed(egui::Key::P) {
+                    Some(Tool::Stamp)
                 } else if i.key_pressed(egui::Key::G) {
                     Some(Tool::Fill)
                 } else if i.key_pressed(egui::Key::L) {
@@ -944,10 +1917,12 @@ impl EditorApp {
             };
 
             // Paint layer toggle (T): ground <-> remembered wall side.
-            let toggle_ground_wall_layer = !cmd && !shift && i.key_pressed(egui::Key::T);
+            let toggle_ground_wall_layer =
+                !keyboard_captured && !cmd && !shift && i.key_pressed(egui::Key::T);
 
             // Wall target toggle (Q): left <-> right when in wall mode.
-            let toggle_wall_target_side = !cmd && !shift && i.key_pressed(egui::Key::Q);
+            let toggle_wall_target_side =
+                !keyboard_captured && !cmd && !shift && i.key_pressed(egui::Key::Q);
 
             // Layer toggle shortcuts (Cmd+1/2/3/4)
             let toggle_layer = if cmd && !shift {
@@ -967,7 +1942,8 @@ impl EditorApp {
             };
 
             // Collision overlay toggle (Tab)
-            let toggle_tab_overlay = !cmd && !shift && i.key_pressed(egui::Key::Tab);
+            let toggle_tab_overlay =
+                !keyboard_captured && !cmd && !shift && i.key_pressed(egui::Key::Tab);
 
             // Keyboard zoom (Cmd+/-, snap to 25%; Cmd+0 reset)
             let keyboard_zoom: Option<i8> = if cmd && !shift {
@@ -988,8 +1964,8 @@ impl EditorApp {
             let redo = cmd && shift && i.key_pressed(egui::Key::Z);
 
             (
-                cmd && i.key_pressed(egui::Key::N),
-                cmd && i.key_pressed(egui::Key::O),
+                cmd && !shift && i.key_pressed(egui::Key::N),
+                cmd && !shift && i.key_pressed(egui::Key::O),
                 save,
                 save_as,
                 cmd && i.key_pressed(egui::Key::W),
@@ -1073,7 +2049,7 @@ impl EditorApp {
             self.new_document();
         }
         if open {
-            self.open_document();
+            self.open_map_document();
         }
         if close {
             self.close_tab(self.active_tab);
@@ -1102,31 +2078,11 @@ impl EditorApp {
         for file in dropped {
             if let Some(path) = file.path {
                 let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                if !ext.eq_ignore_ascii_case("map") {
+                let supported = ext.eq_ignore_ascii_case("map") || ext.eq_ignore_ascii_case("ron");
+                if !supported {
                     continue;
                 }
-                // Check if already open — just switch to it
-                let already_open = self
-                    .documents
-                    .iter()
-                    .position(|doc| doc.path.as_ref() == Some(&path));
-                if let Some(i) = already_open {
-                    self.active_tab = i;
-                    self.clear_edit_anchors();
-                    continue;
-                }
-                let hint = self.map_hint_for_path(&path);
-                match MapDocument::open(path.clone(), hint) {
-                    Ok(doc) => {
-                        self.documents.push(doc);
-                        self.active_tab = self.documents.len() - 1;
-                        self.clear_edit_anchors();
-                        info!("Opened dropped map: {}", path.display());
-                    }
-                    Err(e) => {
-                        warn!("Failed to open dropped file {}: {}", path.display(), e);
-                    }
-                }
+                self.open_document_from_path(path);
             }
         }
     }
@@ -1154,18 +2110,32 @@ impl eframe::App for EditorApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.poll_asset_import_progress(ctx);
+        self.poll_asset_load_progress(ctx);
+
         // Deferred atlas uploads
         self.try_upload_atlas(ctx);
         self.try_upload_wall_atlas(ctx);
         self.try_upload_tab_overlay_texture(ctx);
 
-        if ctx.input(|i| i.viewport().close_requested()) {
-            self.request_window_close(ctx);
+        let close_requested = ctx.input(|i| i.viewport().close_requested());
+        if close_requested {
+            if self.allow_window_close {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                self.request_window_close(ctx);
+            }
+        } else {
+            self.allow_window_close = false;
         }
 
         WindowFrame::show(ctx);
 
-        if !self.unsaved_changes_dialog.is_open() {
+        if !self.unsaved_changes_dialog.is_open()
+            && !self.prefab_delete_dialog.is_open()
+            && !self.asset_setup_dialog.is_open()
+            && self.asset_import_task.is_none()
+        {
             self.handle_keyboard_shortcuts(ctx);
             self.handle_dropped_files(ctx);
         }
@@ -1207,11 +2177,13 @@ impl eframe::App for EditorApp {
         let status_action = self.status_bar.show(
             ctx,
             &doc.map,
+            doc.kind(),
             &current_file_label,
             effective_tool,
             self.hover_tile,
             current_zoom,
             &self.status_message,
+            self.status_progress(),
         );
         match status_action {
             StatusBarAction::ZoomIn => {
@@ -1221,10 +2193,22 @@ impl eframe::App for EditorApp {
                 Self::snap_zoom(&mut self.documents[self.active_tab].camera, -1);
             }
             StatusBarAction::SetDimensions(w, h) => {
-                if let Err(err) = self.documents[self.active_tab].set_dimensions(w, h) {
+                let kind = self.documents[self.active_tab].kind();
+                let resize_result = match kind {
+                    DocumentKind::Map => self.documents[self.active_tab].set_dimensions(w, h),
+                    DocumentKind::Prefab => {
+                        self.documents[self.active_tab].resize_canvas_centered(w, h)
+                    }
+                };
+                if let Err(err) = resize_result {
                     self.status_message = err;
                 } else {
-                    self.status_message = format!("Resized map to {}x{}", w, h);
+                    self.status_message = match kind {
+                        DocumentKind::Map => format!("Resized map to {}x{}", w, h),
+                        DocumentKind::Prefab => {
+                            format!("Resized prefab canvas to {}x{}", w, h)
+                        }
+                    };
                 }
             }
             StatusBarAction::None => {}
@@ -1259,12 +2243,30 @@ impl eframe::App for EditorApp {
             ToolbarAction::None => {}
         }
 
-        if let Some((width, height)) =
-            self.new_map_size_dialog
-                .show(ctx, "new_map_size_dialog", "New Map", "Create", None)
-        {
+        let new_document_title = match self.pending_new_document_kind {
+            DocumentKind::Map => "New Map",
+            DocumentKind::Prefab => "New Prefab",
+        };
+        let create_button = match self.pending_new_document_kind {
+            DocumentKind::Map => "Create",
+            DocumentKind::Prefab => "Create Prefab",
+        };
+        if let Some((width, height)) = self.new_map_size_dialog.show(
+            ctx,
+            "new_map_size_dialog",
+            new_document_title,
+            create_button,
+            None,
+            crate::panels::MapSizeDialogMode::Standard,
+        ) {
             self.create_document_with_dimensions(width, height);
         }
+
+        let asset_setup_action = self.asset_setup_dialog.show(ctx);
+        self.resolve_asset_setup_action(asset_setup_action);
+
+        let prefab_delete_action = self.prefab_delete_dialog.show(ctx);
+        self.resolve_prefab_delete_action(prefab_delete_action);
 
         // Export dialog
         {
@@ -1331,10 +2333,11 @@ impl eframe::App for EditorApp {
         }
 
         // Inspector: tile palette + tab map
-        let requested_layer = {
+        let (requested_layer, inspector_response) = {
             let doc = &self.documents[self.active_tab];
             let mut requested = self.active_paint_layer;
-            InspectorPanel::show(
+            let renaming_prefab_index = self.renaming_prefab_index();
+            let response = InspectorPanel::show(
                 ctx,
                 &doc.map,
                 self.sotp_data.as_deref(),
@@ -1347,18 +2350,27 @@ impl eframe::App for EditorApp {
                 &mut self.selected_wall_tile,
                 &mut self.reveal_ground_tile_in_palette,
                 &mut self.reveal_wall_tile_in_palette,
+                &self.prefab_assets,
+                self.selected_prefab,
+                &mut self.prefab_search,
+                renaming_prefab_index,
+                &mut self.prefab_rename_buffer,
+                &mut self.prefab_rename_should_focus,
+                self.active_tool,
             );
-            requested
+            (requested, response)
         };
         if requested_layer != self.active_paint_layer {
             self.set_active_paint_layer(requested_layer);
         }
+        self.handle_inspector_response(inspector_response);
 
         // Viewport needs mutable access to camera for panning
         if self.sotp_data.is_none() {
             self.show_collision_overlay = false;
         }
 
+        let stamp_prefab = self.selected_prefab_map().cloned();
         let vp_result = {
             let doc = &mut self.documents[self.active_tab];
             ViewportPanel::show(
@@ -1372,6 +2384,7 @@ impl eframe::App for EditorApp {
                 self.selected_wall_tile,
                 self.line_tool_start_tile,
                 self.shape_tool_start_tile,
+                stamp_prefab.as_ref(),
                 self.tile_atlas.as_ref(),
                 self.atlas_texture.as_ref(),
                 self.wall_atlas.as_ref(),
@@ -1473,6 +2486,24 @@ impl eframe::App for EditorApp {
         } else if self.active_tool == Tool::Fill {
             if let Some((col, row, paint_value)) = vp_result.fill_clicked_tile {
                 Self::paint_layer_fill(doc, paint_layer, paint_value, (col, row));
+            }
+        } else if self.active_tool == Tool::Stamp {
+            if let Some(origin) = vp_result.stamp_clicked_tile {
+                if let Some(prefab) = stamp_prefab.as_ref() {
+                    let result = doc.apply_prefab_stamp(origin, prefab);
+                    if result.changed_tiles > 0 {
+                        self.status_message = if result.clipped_tiles > 0 {
+                            format!(
+                                "Placed prefab at {}, {} ({} clipped tiles).",
+                                origin.0, origin.1, result.clipped_tiles
+                            )
+                        } else {
+                            format!("Placed prefab at {}, {}.", origin.0, origin.1)
+                        };
+                    }
+                } else {
+                    self.status_message = "Select a prefab before placing.".to_string();
+                }
             }
         }
         if let Some((col, row, paint_value)) = vp_result.painted_tile {

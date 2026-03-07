@@ -1,6 +1,14 @@
 use eframe::egui;
 
+use crate::prefab;
 use crate::theme::theme_colors;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MapSizeDialogMode {
+    #[default]
+    Standard,
+    PrefabCanvas,
+}
 
 #[derive(Default)]
 pub struct MapSizeDialog {
@@ -31,8 +39,15 @@ impl MapSizeDialog {
         title: &str,
         confirm_label: &str,
         current_map: Option<&map::Map>,
+        mode: MapSizeDialogMode,
     ) -> Option<(u16, u16)> {
         if !self.open {
+            return None;
+        }
+
+        let viewport = ctx.viewport_rect();
+        let screen = ctx.content_rect();
+        if !viewport.is_finite() || !screen.is_finite() {
             return None;
         }
 
@@ -42,7 +57,6 @@ impl MapSizeDialog {
         let mut submitted_size = None;
 
         // Dim the background and allow click-away dismissal.
-        let screen = ctx.input(|i| i.viewport_rect());
         egui::Area::new(egui::Id::new((id, "backdrop")))
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
@@ -125,7 +139,7 @@ impl MapSizeDialog {
                         Self::parse_dim(&self.width_input),
                         Self::parse_dim(&self.height_input),
                     ) {
-                        (Ok(width), Ok(height)) => Self::truncation_warning(map, width, height),
+                        (Ok(width), Ok(height)) => Self::warning_text(mode, map, width, height),
                         _ => None,
                     };
 
@@ -252,6 +266,28 @@ impl MapSizeDialog {
         }
     }
 
+    fn prefab_canvas_warning(map: &map::Map, width: u16, height: u16) -> Option<String> {
+        let clipped_tiles = prefab::centered_canvas_tile_loss(map, width, height);
+        (clipped_tiles > 0).then(|| {
+            format!(
+                "Warning: resizing the canvas to {}x{} will clip {} painted tile(s).",
+                width, height, clipped_tiles
+            )
+        })
+    }
+
+    fn warning_text(
+        mode: MapSizeDialogMode,
+        map: &map::Map,
+        width: u16,
+        height: u16,
+    ) -> Option<String> {
+        match mode {
+            MapSizeDialogMode::Standard => Self::truncation_warning(map, width, height),
+            MapSizeDialogMode::PrefabCanvas => Self::prefab_canvas_warning(map, width, height),
+        }
+    }
+
     fn centered_row_label(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
         let width = match text {
             "Width" => 40.0,
@@ -275,7 +311,7 @@ impl MapSizeDialog {
 
 #[cfg(test)]
 mod tests {
-    use super::MapSizeDialog;
+    use super::{MapSizeDialog, MapSizeDialogMode};
 
     #[test]
     fn truncation_warning_only_when_new_tile_count_is_smaller() {
@@ -283,5 +319,16 @@ mod tests {
         assert!(MapSizeDialog::truncation_warning(&map, 10, 10).is_none());
         assert!(MapSizeDialog::truncation_warning(&map, 12, 10).is_none());
         assert!(MapSizeDialog::truncation_warning(&map, 5, 5).is_some());
+    }
+
+    #[test]
+    fn prefab_canvas_warning_only_when_painted_tiles_would_clip() {
+        let mut map = map::Map::new(4, 4);
+        map.tiles[0].ground = 7;
+        map.tiles[1 * 4 + 1].left_wall = 9;
+        map.tiles[2 * 4 + 2].right_wall = 11;
+
+        assert!(MapSizeDialog::warning_text(MapSizeDialogMode::PrefabCanvas, &map, 6, 6).is_none());
+        assert!(MapSizeDialog::warning_text(MapSizeDialogMode::PrefabCanvas, &map, 2, 2).is_some());
     }
 }

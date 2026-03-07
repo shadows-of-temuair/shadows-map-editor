@@ -28,6 +28,7 @@ pub enum Tool {
     Fill,
     Eyedropper,
     Shape,
+    Stamp,
 }
 
 impl Tool {
@@ -40,6 +41,7 @@ impl Tool {
             Tool::Fill => "Fill (G)",
             Tool::Eyedropper => "Eyedropper (I)",
             Tool::Shape => "Shape (U)",
+            Tool::Stamp => "Prefab (P)",
         }
     }
 
@@ -52,6 +54,7 @@ impl Tool {
             Tool::Fill => icons::draw_icon_fill(painter, rect, color),
             Tool::Eyedropper => icons::draw_icon_eyedropper(painter, rect, color),
             Tool::Shape => icons::draw_icon_shapes(painter, rect, color),
+            Tool::Stamp => icons::draw_icon_prefab(painter, rect, color),
         }
     }
 }
@@ -60,9 +63,13 @@ impl ShapeKind {
     fn draw_icon(self, painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
         match self {
             ShapeKind::Rect => icons::draw_icon_rectangle(painter, rect, color),
+            ShapeKind::SolidRect => icons::draw_icon_rectangle_solid(painter, rect, color),
             ShapeKind::Square => icons::draw_icon_square(painter, rect, color),
+            ShapeKind::SolidSquare => icons::draw_icon_square_solid(painter, rect, color),
             ShapeKind::Circle => icons::draw_icon_circle(painter, rect, color),
+            ShapeKind::SolidCircle => icons::draw_icon_circle_solid(painter, rect, color),
             ShapeKind::Triangle => icons::draw_icon_triangle(painter, rect, color),
+            ShapeKind::SolidTriangle => icons::draw_icon_triangle_solid(painter, rect, color),
         }
     }
 }
@@ -136,10 +143,14 @@ impl ToolbarPanel {
                 &str,
                 ToolbarAction,
             )] = &[
-                (icons::draw_icon_new, "New (Cmd+N)", ToolbarAction::NewFile),
+                (
+                    icons::draw_icon_new,
+                    "New Map (Cmd+N)",
+                    ToolbarAction::NewFile,
+                ),
                 (
                     icons::draw_icon_open,
-                    "Open (Cmd+O)",
+                    "Open Map (Cmd+O)",
                     ToolbarAction::OpenFile,
                 ),
                 (
@@ -174,9 +185,10 @@ impl ToolbarPanel {
             for &tool in &[
                 Tool::Select,
                 Tool::Pencil,
+                Tool::Stamp,
                 Tool::Line,
-                Tool::Eraser,
                 Tool::Fill,
+                Tool::Eraser,
                 Tool::Eyedropper,
             ] {
                 let is_active = *active_tool == tool;
@@ -275,7 +287,7 @@ impl ToolbarPanel {
             .id(popup_id)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
-                ui.set_min_width(118.0);
+                ui.set_min_width(146.0);
                 for shape in ShapeKind::ALL {
                     let selected = *active_shape == shape;
                     let item = ui.horizontal(|ui| {

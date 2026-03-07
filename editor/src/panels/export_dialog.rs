@@ -74,11 +74,16 @@ impl ExportDialog {
             return ExportDialogAction::None;
         }
 
+        let viewport = ctx.viewport_rect();
+        let screen = ctx.content_rect();
+        if !viewport.is_finite() || !screen.is_finite() {
+            return ExportDialogAction::None;
+        }
+
         let colors = theme_colors();
         let mut action = ExportDialogAction::None;
 
         // Dim the background
-        let screen = ctx.input(|i| i.viewport_rect());
         egui::Area::new(egui::Id::new("export_backdrop"))
             .fixed_pos(screen.min)
             .show(ctx, |ui| {

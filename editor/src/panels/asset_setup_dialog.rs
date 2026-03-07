@@ -3,65 +3,63 @@ use eframe::egui;
 use crate::theme::theme_colors;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UnsavedChangesDialogAction {
+pub enum AssetSetupDialogAction {
     None,
-    Save,
-    Discard,
-    Cancel,
+    SelectFolder,
+    NotNow,
 }
 
 #[derive(Default)]
-pub struct UnsavedChangesDialog {
+pub struct AssetSetupDialog {
     open: bool,
-    document_name: String,
 }
 
-impl UnsavedChangesDialog {
-    pub fn open_for(&mut self, document_name: &str) {
+impl AssetSetupDialog {
+    pub fn open(&mut self) {
         self.open = true;
-        self.document_name = document_name.to_string();
+    }
+
+    pub fn close(&mut self) {
+        self.open = false;
     }
 
     pub fn is_open(&self) -> bool {
         self.open
     }
 
-    pub fn show(&mut self, ctx: &egui::Context) -> UnsavedChangesDialogAction {
+    pub fn show(&mut self, ctx: &egui::Context) -> AssetSetupDialogAction {
         if !self.open {
-            return UnsavedChangesDialogAction::None;
+            return AssetSetupDialogAction::None;
         }
 
         let viewport = ctx.viewport_rect();
         let screen = ctx.content_rect();
         if !viewport.is_finite() || !screen.is_finite() {
-            return UnsavedChangesDialogAction::None;
+            return AssetSetupDialogAction::None;
         }
 
         let colors = theme_colors();
         let mut open = self.open;
-        let mut action = UnsavedChangesDialogAction::None;
+        let mut action = AssetSetupDialogAction::None;
 
-        egui::Area::new(egui::Id::new("unsaved_changes_backdrop"))
+        egui::Area::new(egui::Id::new("asset_setup_backdrop"))
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
-                let response = ui.allocate_response(screen.size(), egui::Sense::click());
+                let _ = ui.allocate_response(screen.size(), egui::Sense::click());
                 ui.painter().rect_filled(
                     screen,
                     0.0,
                     egui::Color32::from_rgba_unmultiplied(0, 0, 0, 140),
                 );
-                if response.clicked() {
-                    action = UnsavedChangesDialogAction::Cancel;
-                }
             });
 
         egui::Window::new("")
-            .id(egui::Id::new("unsaved_changes_dialog"))
+            .id(egui::Id::new("asset_setup_dialog"))
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
-            .fixed_size(egui::vec2(400.0, 0.0))
+            .fixed_size(egui::vec2(460.0, 0.0))
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .frame(
                 egui::Frame::NONE
@@ -74,30 +72,31 @@ impl UnsavedChangesDialog {
                 ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 
                 ui.label(
-                    egui::RichText::new("Unsaved Changes")
+                    egui::RichText::new("Asset Setup")
                         .size(18.0)
                         .strong()
                         .color(colors.text),
                 );
                 ui.add_space(4.0);
                 ui.label(
-                    egui::RichText::new(format!(
-                        "Save changes to \"{}\" before discarding them?",
-                        self.document_name
-                    ))
+                    egui::RichText::new(
+                        "The editor needs the original Dark Ages .dat archives to render tiles and walls properly.",
+                    )
                     .size(13.0)
                     .color(colors.text),
                 );
                 ui.label(
-                    egui::RichText::new("Discarding will permanently lose the current edits.")
-                        .size(12.0)
-                        .color(colors.muted),
+                    egui::RichText::new(
+                        "Select your Dark Ages install folder and the editor will copy its .dat files into the local assets/ folder. This keeps the editor self-contained and avoids depending on your install path every time it starts.",
+                    )
+                    .size(12.0)
+                    .color(colors.muted),
                 );
 
                 let submit = ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
                 if escape {
-                    action = UnsavedChangesDialogAction::Cancel;
+                    action = AssetSetupDialogAction::NotNow;
                 }
 
                 ui.add_space(6.0);
@@ -112,51 +111,38 @@ impl UnsavedChangesDialog {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
 
-                        let cancel_btn = ui.add(
+                        let select_btn = ui.add(
                             egui::Button::new(
-                                egui::RichText::new("Cancel").size(14.0).color(colors.text),
-                            )
-                            .fill(colors.bg_3)
-                            .stroke(egui::Stroke::new(1.0, colors.border))
-                            .corner_radius(4.0)
-                            .min_size(egui::vec2(80.0, 32.0)),
-                        );
-                        if cancel_btn.clicked() {
-                            action = UnsavedChangesDialogAction::Cancel;
-                        }
-
-                        let discard_btn = ui.add(
-                            egui::Button::new(
-                                egui::RichText::new("Discard").size(14.0).color(colors.text),
-                            )
-                            .fill(colors.bg_3)
-                            .stroke(egui::Stroke::new(1.0, colors.border))
-                            .corner_radius(4.0)
-                            .min_size(egui::vec2(88.0, 32.0)),
-                        );
-                        if discard_btn.clicked() {
-                            action = UnsavedChangesDialogAction::Discard;
-                        }
-
-                        let save_btn = ui.add(
-                            egui::Button::new(
-                                egui::RichText::new("Save")
+                                egui::RichText::new("Select Dark Ages Folder")
                                     .size(14.0)
                                     .color(egui::Color32::from_rgb(10, 11, 13)),
                             )
                             .fill(colors.accent)
                             .stroke(egui::Stroke::NONE)
                             .corner_radius(4.0)
-                            .min_size(egui::vec2(80.0, 32.0)),
+                            .min_size(egui::vec2(188.0, 32.0)),
                         );
-                        if save_btn.clicked() || submit {
-                            action = UnsavedChangesDialogAction::Save;
+                        if select_btn.clicked() || submit {
+                            action = AssetSetupDialogAction::SelectFolder;
+                        }
+
+                        let not_now_btn = ui.add(
+                            egui::Button::new(
+                                egui::RichText::new("Not Now").size(14.0).color(colors.text),
+                            )
+                            .fill(colors.bg_3)
+                            .stroke(egui::Stroke::new(1.0, colors.border))
+                            .corner_radius(4.0)
+                            .min_size(egui::vec2(92.0, 32.0)),
+                        );
+                        if not_now_btn.clicked() {
+                            action = AssetSetupDialogAction::NotNow;
                         }
                     });
                 });
             });
 
-        if !matches!(action, UnsavedChangesDialogAction::None) {
+        if !matches!(action, AssetSetupDialogAction::None) {
             open = false;
         }
         self.open = open;
