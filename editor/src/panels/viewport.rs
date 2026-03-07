@@ -423,9 +423,27 @@ impl ViewportPanel {
                                 }
                             }
 
-                            Self::draw_tile_highlight(
-                                &painter, col, row, origin, half_w, half_h, &colors,
-                            );
+                            if active_tool == Tool::Stamp {
+                                if let Some(prefab) = stamp_prefab {
+                                    Self::draw_prefab_highlight(
+                                        &painter,
+                                        prefab,
+                                        (col, row),
+                                        origin,
+                                        half_w,
+                                        half_h,
+                                        &colors,
+                                    );
+                                } else {
+                                    Self::draw_tile_highlight(
+                                        &painter, col, row, origin, half_w, half_h, &colors,
+                                    );
+                                }
+                            } else {
+                                Self::draw_tile_highlight(
+                                    &painter, col, row, origin, half_w, half_h, &colors,
+                                );
+                            }
                         }
                     }
                 }
@@ -1073,6 +1091,87 @@ impl ViewportPanel {
         painter.line_segment([right, bottom], stroke);
         painter.line_segment([bottom, left], stroke);
         painter.line_segment([left, top], stroke);
+    }
+
+    fn draw_prefab_highlight(
+        painter: &egui::Painter,
+        prefab: &map::Map,
+        origin_tile: (u16, u16),
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+        colors: &ThemeColors,
+    ) {
+        let Some((min_col, min_row, max_col, max_row)) =
+            Self::prefab_highlight_bounds(prefab, origin_tile)
+        else {
+            Self::draw_tile_highlight(
+                painter,
+                origin_tile.0,
+                origin_tile.1,
+                origin,
+                half_w,
+                half_h,
+                colors,
+            );
+            return;
+        };
+
+        let (top, _, _, left_top) =
+            Self::tile_diamond_points(min_col, min_row, origin, half_w, half_h);
+        let (top_right, right_top, _, _) =
+            Self::tile_diamond_points(max_col, min_row, origin, half_w, half_h);
+        let (_, right_bottom, bottom, _) =
+            Self::tile_diamond_points(max_col, max_row, origin, half_w, half_h);
+        let (_, _, bottom_left, left_bottom) =
+            Self::tile_diamond_points(min_col, max_row, origin, half_w, half_h);
+
+        let mut outline = vec![
+            top,
+            top_right,
+            right_top,
+            right_bottom,
+            bottom,
+            bottom_left,
+            left_bottom,
+            left_top,
+        ];
+        outline.dedup_by(|a, b| a.distance_sq(*b) < 0.01);
+
+        let stroke = egui::Stroke::new(1.5, colors.accent);
+        painter.add(egui::Shape::closed_line(outline, stroke));
+    }
+
+    fn prefab_highlight_bounds(
+        prefab: &map::Map,
+        origin_tile: (u16, u16),
+    ) -> Option<(i32, i32, i32, i32)> {
+        let bounds = prefab::occupied_bounds(prefab)?;
+        let anchor = prefab::placement_anchor(prefab);
+        Some((
+            i32::from(origin_tile.0) + i32::from(bounds.min_col) - i32::from(anchor.0),
+            i32::from(origin_tile.1) + i32::from(bounds.min_row) - i32::from(anchor.1),
+            i32::from(origin_tile.0) + i32::from(bounds.max_col) - i32::from(anchor.0),
+            i32::from(origin_tile.1) + i32::from(bounds.max_row) - i32::from(anchor.1),
+        ))
+    }
+
+    fn tile_diamond_points(
+        col: i32,
+        row: i32,
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+    ) -> (egui::Pos2, egui::Pos2, egui::Pos2, egui::Pos2) {
+        let cx = origin.x + (col as f32 - row as f32) * half_w;
+        let cy = origin.y + (col as f32 + row as f32) * half_h;
+
+        (
+            egui::pos2(cx, cy),
+            egui::pos2(cx + half_w, cy + half_h),
+            egui::pos2(cx, cy + half_h * 2.0),
+            egui::pos2(cx - half_w, cy + half_h),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -4,6 +4,30 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] - 2026-03-07
+
+### Added
+- Full prefab authoring workflow with `.ron` prefab documents stored under `prefabs/`, prefab tabs, and map stamping with undo/redo support.
+- Prefab browser management tools including search, inline rename, duplicate, delete confirmation, and rendered prefab previews in the inspector.
+- Startup asset setup flow for missing Dark Ages `.dat` archives, with guided import into local `assets/` and inline status-bar progress during copy/load.
+- Solid shape variants for rectangles, squares, circles, and triangles.
+
+### Changed
+- Asset loading now starts asynchronously after launch, reports progress in the status bar, and builds tile and wall atlas work concurrently.
+- Prefab placement, ghost previews, and hover highlights now use occupied-bounds centering instead of raw canvas origin.
+- Prefab resizing is now exposed as `Resize Canvas...`, recenters existing content in the new canvas, and warns before painted tiles would be clipped.
+- Prefab editing now opens directly into brush mode with wall painting active, matching the most common prefab-editing workflow.
+- The prefab inspector now uses a searchable list-and-preview layout with a draggable splitter, full-width rendered preview pane, and clearer destructive action styling.
+- Save now writes back to an existing document path without reopening the save dialog.
+- Status bar message changes now briefly crossfade for better visual awareness.
+
+### Fixed
+- Discarding dirty documents on app close no longer loops back into the unsaved-changes dialog.
+- Typing in prefab search or inline rename fields no longer triggers global tool hotkeys.
+- Inline prefab rename now correctly auto-selects text, commits on `Enter`, cancels on `Escape`, resolves on focus loss, and rejects duplicate names case-insensitively.
+- Missing-asset startup no longer logs a spurious `assets` load warning or panics after the macOS folder picker returns.
+- Prefab preview sizing and inspector layout now respect the status bar area and avoid clipping the rendered preview footer.
+
 ## [0.3.0] - 2026-03-05
 
 ### Added

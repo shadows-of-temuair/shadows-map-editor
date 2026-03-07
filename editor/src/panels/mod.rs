@@ -14,7 +14,7 @@ mod window_frame;
 pub use asset_setup_dialog::{AssetSetupDialog, AssetSetupDialogAction};
 pub use export_dialog::{ExportDialog, ExportDialogAction};
 pub use inspector::{InspectorPanel, InspectorResponse};
-pub use map_size_dialog::MapSizeDialog;
+pub use map_size_dialog::{MapSizeDialog, MapSizeDialogMode};
 pub use prefab_delete_dialog::{PrefabDeleteDialog, PrefabDeleteDialogAction};
 pub use status_bar::{StatusBarAction, StatusBarPanel};
 pub use tab_bar::{TabBarAction, TabBarPanel};

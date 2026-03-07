@@ -54,6 +54,7 @@ impl ShapeKind {
     }
 }
 
+#[cfg(test)]
 pub fn outline_points(shape: ShapeKind, start: (u16, u16), end: (u16, u16)) -> Vec<(i32, i32)> {
     let start = (start.0 as i32, start.1 as i32);
     let end = (end.0 as i32, end.1 as i32);

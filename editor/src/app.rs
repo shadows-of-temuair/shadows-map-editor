@@ -37,6 +37,10 @@ struct PendingPrefabDeletion {
     name: String,
 }
 
+struct PendingPrefabRename {
+    path: PathBuf,
+}
+
 struct LoadedAssets {
     tile_atlas: Option<render::TileAtlas>,
     wall_atlas: Option<render::SpriteAtlas>,
@@ -130,6 +134,9 @@ pub struct EditorApp {
     pending_unsaved_changes: Option<PendingUnsavedChanges>,
     prefab_delete_dialog: PrefabDeleteDialog,
     pending_prefab_deletion: Option<PendingPrefabDeletion>,
+    pending_prefab_rename: Option<PendingPrefabRename>,
+    prefab_rename_buffer: String,
+    prefab_rename_should_focus: bool,
     allow_window_close: bool,
     status_message: String,
     atlas_needs_upload: bool,
@@ -195,6 +202,9 @@ impl EditorApp {
             pending_unsaved_changes: None,
             prefab_delete_dialog: PrefabDeleteDialog::default(),
             pending_prefab_deletion: None,
+            pending_prefab_rename: None,
+            prefab_rename_buffer: String::new(),
+            prefab_rename_should_focus: false,
             allow_window_close: false,
             status_message: if needs_asset_setup {
                 String::from(ASSET_SETUP_PROMPT_STATUS)
@@ -261,6 +271,13 @@ impl EditorApp {
             .map(|prefab| &prefab.map)
     }
 
+    fn renaming_prefab_index(&self) -> Option<usize> {
+        let pending = self.pending_prefab_rename.as_ref()?;
+        self.prefab_assets
+            .iter()
+            .position(|prefab| Self::paths_match(&prefab.path, &pending.path))
+    }
+
     fn set_active_tool(&mut self, tool: Tool) {
         if self.active_tool != tool {
             self.active_tool = tool;
@@ -279,6 +296,11 @@ impl EditorApp {
         }
         self.active_paint_layer = layer;
         self.clear_edit_anchors();
+    }
+
+    fn enter_prefab_edit_mode(&mut self) {
+        self.set_active_tool(Tool::Pencil);
+        self.set_active_paint_layer(self.last_wall_paint_layer);
     }
 
     fn selected_tile_for_layer(&self, layer: PaintLayer) -> u16 {
@@ -1078,6 +1100,7 @@ impl EditorApp {
                 {
                     self.reload_prefabs();
                     self.select_prefab_by_path(&path);
+                    self.enter_prefab_edit_mode();
                 }
                 return;
             }
@@ -1102,6 +1125,7 @@ impl EditorApp {
                 if kind == DocumentKind::Prefab {
                     self.reload_prefabs();
                     self.select_prefab_by_path(&path);
+                    self.enter_prefab_edit_mode();
                 }
                 info!("Opened {}: {}", kind.noun(), path.display());
                 self.status_message = format!(
@@ -1193,6 +1217,35 @@ impl EditorApp {
             }
         }
         if let Some(index) = response
+            .duplicate_prefab_index
+            .filter(|index| *index < self.prefab_assets.len())
+        {
+            match self.duplicate_prefab(index) {
+                Ok(path) => {
+                    let duplicated_to = path
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .unwrap_or("prefab");
+                    self.status_message = format!("Duplicated prefab to {}.", duplicated_to);
+                }
+                Err(error) => {
+                    self.status_message = error;
+                }
+            }
+        }
+        if let Some(index) = response
+            .start_rename_prefab_index
+            .filter(|index| *index < self.prefab_assets.len())
+        {
+            self.begin_prefab_rename_flow(index);
+        }
+        if response.submit_prefab_rename {
+            self.commit_prefab_rename();
+        }
+        if response.cancel_prefab_rename {
+            self.cancel_prefab_rename();
+        }
+        if let Some(index) = response
             .delete_prefab_index
             .filter(|index| *index < self.prefab_assets.len())
         {
@@ -1200,15 +1253,73 @@ impl EditorApp {
         }
     }
 
-    fn begin_prefab_delete_flow(&mut self, index: usize) {
+    fn begin_prefab_rename_flow(&mut self, index: usize) {
         let Some(prefab) = self.prefab_assets.get(index) else {
             return;
         };
 
+        self.pending_prefab_rename = Some(PendingPrefabRename {
+            path: prefab.path.clone(),
+        });
+        self.prefab_rename_buffer = prefab.file_stem_name().to_string();
+        self.prefab_rename_should_focus = true;
+    }
+
+    fn cancel_prefab_rename(&mut self) {
+        self.pending_prefab_rename = None;
+        self.prefab_rename_buffer.clear();
+        self.prefab_rename_should_focus = false;
+    }
+
+    fn commit_prefab_rename(&mut self) {
+        let Some(pending) = self.pending_prefab_rename.as_ref() else {
+            return;
+        };
+
+        let source_path = pending.path.clone();
+        let requested_name = self.prefab_rename_buffer.clone();
+        let sanitized_name = prefab::sanitize_prefab_name(&requested_name);
+        if Self::prefab_name_conflicts(&self.prefab_assets, &source_path, &sanitized_name) {
+            self.status_message = format!("A prefab named {} already exists.", sanitized_name);
+            self.cancel_prefab_rename();
+            return;
+        }
+
+        match self.rename_prefab(&source_path, &requested_name) {
+            Ok(path) => {
+                let renamed_to = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("prefab");
+                self.status_message = format!("Renamed prefab to {}.", renamed_to);
+                self.cancel_prefab_rename();
+            }
+            Err(error) => {
+                self.status_message = error;
+                self.prefab_rename_should_focus = true;
+            }
+        }
+    }
+
+    fn begin_prefab_delete_flow(&mut self, index: usize) {
+        let Some(prefab) = self.prefab_assets.get(index) else {
+            return;
+        };
+        let prefab_path = prefab.path.clone();
         let name = prefab.file_stem_name().to_string();
+
+        if self
+            .pending_prefab_rename
+            .as_ref()
+            .map(|pending| Self::paths_match(&pending.path, &prefab_path))
+            .unwrap_or(false)
+        {
+            self.cancel_prefab_rename();
+        }
+
         self.prefab_delete_dialog.open_for(&name);
         self.pending_prefab_deletion = Some(PendingPrefabDeletion {
-            path: prefab.path.clone(),
+            path: prefab_path,
             name,
         });
     }
@@ -1261,6 +1372,111 @@ impl EditorApp {
             .map_err(|error| format!("Delete failed for {}: {}", path.display(), error))?;
         self.reload_prefabs();
         Ok(())
+    }
+
+    fn duplicate_prefab(&mut self, index: usize) -> Result<PathBuf, String> {
+        let Some(prefab) = self.prefab_assets.get(index) else {
+            return Err("Could not find prefab to duplicate.".to_string());
+        };
+
+        for doc in &self.documents {
+            let Some(doc_path) = doc.path.as_ref() else {
+                continue;
+            };
+            if Self::paths_match(doc_path, &prefab.path) && doc.dirty {
+                return Err(format!(
+                    "Save open prefab tabs for {} before duplicating it.",
+                    prefab.file_stem_name()
+                ));
+            }
+        }
+
+        let duplicate_name =
+            Self::next_duplicate_prefab_name(&self.prefab_assets, prefab.file_stem_name());
+        let prefabs_dir = prefab::ensure_prefabs_dir()
+            .map_err(|error| format!("Could not access prefabs/: {}", error))?;
+        let destination = prefabs_dir.join(format!("{duplicate_name}.ron"));
+
+        let mut prefab_file = prefab::PrefabFile::load(&prefab.path)
+            .map_err(|error| format!("Could not duplicate {}: {}", prefab.path.display(), error))?;
+        prefab_file.name = Some(duplicate_name.clone());
+        prefab_file.save(&destination).map_err(|error| {
+            format!(
+                "Could not write duplicate {}: {}",
+                destination.display(),
+                error
+            )
+        })?;
+
+        self.reload_prefabs();
+        self.select_prefab_by_path(&destination);
+        Ok(destination)
+    }
+
+    fn rename_prefab(&mut self, path: &Path, requested_name: &str) -> Result<PathBuf, String> {
+        let sanitized_name = prefab::sanitize_prefab_name(requested_name);
+        if sanitized_name.is_empty() {
+            return Err("Prefab name must contain at least one letter or number.".to_string());
+        }
+        if Self::prefab_name_conflicts(&self.prefab_assets, path, &sanitized_name) {
+            return Err(format!("A prefab named {} already exists.", sanitized_name));
+        }
+
+        let prefabs_dir = prefab::ensure_prefabs_dir()
+            .map_err(|error| format!("Could not access prefabs/: {}", error))?;
+        let destination = prefabs_dir.join(format!("{sanitized_name}.ron"));
+        if !Self::paths_match(path, &destination) {
+            fs::rename(path, &destination).map_err(|error| {
+                format!(
+                    "Rename failed for {} -> {}: {}",
+                    path.display(),
+                    destination.display(),
+                    error
+                )
+            })?;
+        }
+
+        self.update_open_prefab_paths(path, &destination);
+        self.reload_prefabs();
+        self.select_prefab_by_path(&destination);
+        Ok(destination)
+    }
+
+    fn update_open_prefab_paths(&mut self, old_path: &Path, new_path: &Path) {
+        for doc in &mut self.documents {
+            let Some(doc_path) = doc.path.as_ref() else {
+                continue;
+            };
+            if !Self::paths_match(doc_path, old_path) {
+                continue;
+            }
+            doc.update_prefab_path(new_path.to_path_buf());
+        }
+    }
+
+    fn prefab_name_conflicts(
+        prefabs: &[PrefabAsset],
+        current_path: &Path,
+        candidate_name: &str,
+    ) -> bool {
+        prefabs.iter().any(|prefab| {
+            !Self::paths_match(&prefab.path, current_path)
+                && prefab.file_stem_name().eq_ignore_ascii_case(candidate_name)
+        })
+    }
+
+    fn next_duplicate_prefab_name(prefabs: &[PrefabAsset], base_name: &str) -> String {
+        let mut suffix = 1usize;
+        loop {
+            let candidate = format!("{base_name}_{suffix}");
+            if !prefabs
+                .iter()
+                .any(|prefab| prefab.file_stem_name().eq_ignore_ascii_case(&candidate))
+            {
+                return candidate;
+            }
+            suffix += 1;
+        }
     }
 
     fn save_document_at(&mut self, index: usize, prompt_for_path: bool) -> bool {
@@ -1961,6 +2177,7 @@ impl eframe::App for EditorApp {
         let status_action = self.status_bar.show(
             ctx,
             &doc.map,
+            doc.kind(),
             &current_file_label,
             effective_tool,
             self.hover_tile,
@@ -1977,10 +2194,21 @@ impl eframe::App for EditorApp {
             }
             StatusBarAction::SetDimensions(w, h) => {
                 let kind = self.documents[self.active_tab].kind();
-                if let Err(err) = self.documents[self.active_tab].set_dimensions(w, h) {
+                let resize_result = match kind {
+                    DocumentKind::Map => self.documents[self.active_tab].set_dimensions(w, h),
+                    DocumentKind::Prefab => {
+                        self.documents[self.active_tab].resize_canvas_centered(w, h)
+                    }
+                };
+                if let Err(err) = resize_result {
                     self.status_message = err;
                 } else {
-                    self.status_message = format!("Resized {} to {}x{}", kind.noun(), w, h);
+                    self.status_message = match kind {
+                        DocumentKind::Map => format!("Resized map to {}x{}", w, h),
+                        DocumentKind::Prefab => {
+                            format!("Resized prefab canvas to {}x{}", w, h)
+                        }
+                    };
                 }
             }
             StatusBarAction::None => {}
@@ -2029,6 +2257,7 @@ impl eframe::App for EditorApp {
             new_document_title,
             create_button,
             None,
+            crate::panels::MapSizeDialogMode::Standard,
         ) {
             self.create_document_with_dimensions(width, height);
         }
@@ -2107,6 +2336,7 @@ impl eframe::App for EditorApp {
         let (requested_layer, inspector_response) = {
             let doc = &self.documents[self.active_tab];
             let mut requested = self.active_paint_layer;
+            let renaming_prefab_index = self.renaming_prefab_index();
             let response = InspectorPanel::show(
                 ctx,
                 &doc.map,
@@ -2123,6 +2353,9 @@ impl eframe::App for EditorApp {
                 &self.prefab_assets,
                 self.selected_prefab,
                 &mut self.prefab_search,
+                renaming_prefab_index,
+                &mut self.prefab_rename_buffer,
+                &mut self.prefab_rename_should_focus,
                 self.active_tool,
             );
             (requested, response)

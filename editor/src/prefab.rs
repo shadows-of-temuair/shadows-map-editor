@@ -33,6 +33,10 @@ pub struct PrefabAsset {
     pub map: map::Map,
 }
 
+pub fn tile_is_occupied(tile: &map::Tile) -> bool {
+    tile.ground != 0 || tile.left_wall != 0 || tile.right_wall != 0
+}
+
 pub fn occupied_bounds(map: &map::Map) -> Option<OccupiedBounds> {
     let mut min_col = u16::MAX;
     let mut min_row = u16::MAX;
@@ -44,8 +48,7 @@ pub fn occupied_bounds(map: &map::Map) -> Option<OccupiedBounds> {
         for col in 0..map.width {
             let idx = row as usize * map.width as usize + col as usize;
             let tile = map.tiles[idx];
-            let occupied = tile.ground != 0 || tile.left_wall != 0 || tile.right_wall != 0;
-            if !occupied {
+            if !tile_is_occupied(&tile) {
                 continue;
             }
 
@@ -74,6 +77,37 @@ pub fn placement_anchor(map: &map::Map) -> (u16, u16) {
             )
         })
         .unwrap_or((0, 0))
+}
+
+pub fn centered_canvas_offset(old_extent: u16, new_extent: u16) -> i32 {
+    i32::from(new_extent / 2) - i32::from(old_extent / 2)
+}
+
+pub fn centered_canvas_tile_loss(map: &map::Map, new_width: u16, new_height: u16) -> usize {
+    let col_offset = centered_canvas_offset(map.width, new_width);
+    let row_offset = centered_canvas_offset(map.height, new_height);
+    let mut lost_tiles = 0usize;
+
+    for row in 0..map.height {
+        for col in 0..map.width {
+            let idx = row as usize * map.width as usize + col as usize;
+            if !tile_is_occupied(&map.tiles[idx]) {
+                continue;
+            }
+
+            let new_col = i32::from(col) + col_offset;
+            let new_row = i32::from(row) + row_offset;
+            if new_col < 0
+                || new_row < 0
+                || new_col >= i32::from(new_width)
+                || new_row >= i32::from(new_height)
+            {
+                lost_tiles += 1;
+            }
+        }
+    }
+
+    lost_tiles
 }
 
 impl PrefabAsset {
@@ -309,5 +343,17 @@ mod tests {
         map.tiles[3 * 6 + 4].left_wall = 10;
 
         assert_eq!(placement_anchor(&map), (3, 2));
+    }
+
+    #[test]
+    fn centered_canvas_tile_loss_counts_clipped_non_empty_tiles() {
+        let mut map = map::Map::new(4, 4);
+        map.tiles[0].ground = 1;
+        map.tiles[5].ground = 2;
+        map.tiles[10].left_wall = 3;
+        map.tiles[15].right_wall = 4;
+
+        assert_eq!(centered_canvas_tile_loss(&map, 2, 2), 2);
+        assert_eq!(centered_canvas_tile_loss(&map, 6, 6), 0);
     }
 }

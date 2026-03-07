@@ -38,6 +38,10 @@ pub struct InspectorResponse {
     pub import_prefab_requested: bool,
     pub select_prefab_index: Option<usize>,
     pub edit_prefab_index: Option<usize>,
+    pub duplicate_prefab_index: Option<usize>,
+    pub start_rename_prefab_index: Option<usize>,
+    pub submit_prefab_rename: bool,
+    pub cancel_prefab_rename: bool,
     pub delete_prefab_index: Option<usize>,
 }
 
@@ -57,6 +61,12 @@ struct PrefabPaneLayout {
     max_preview_height: f32,
 }
 
+struct PrefabListRowOutput {
+    response: egui::Response,
+    rename_submitted: bool,
+    rename_canceled: bool,
+}
+
 impl RenderBounds {
     fn width(self) -> f32 {
         (self.max.x - self.min.x).max(1.0)
@@ -68,6 +78,17 @@ impl RenderBounds {
 }
 
 impl InspectorPanel {
+    fn select_all_text(ui: &egui::Ui, widget_id: egui::Id, value_text: &str) {
+        let mut state = egui::TextEdit::load_state(ui.ctx(), widget_id).unwrap_or_default();
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::default(),
+                egui::text::CCursor::new(value_text.chars().count()),
+            )));
+        state.store(ui.ctx(), widget_id);
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn show(
         ctx: &egui::Context,
@@ -85,6 +106,9 @@ impl InspectorPanel {
         prefabs: &[PrefabAsset],
         selected_prefab_index: Option<usize>,
         prefab_search: &mut String,
+        renaming_prefab_index: Option<usize>,
+        prefab_rename_buffer: &mut String,
+        prefab_rename_should_focus: &mut bool,
         active_tool: Tool,
     ) -> InspectorResponse {
         let colors = theme_colors();
@@ -122,6 +146,9 @@ impl InspectorPanel {
                     prefabs,
                     selected_prefab_index,
                     prefab_search,
+                    renaming_prefab_index,
+                    prefab_rename_buffer,
+                    prefab_rename_should_focus,
                     active_tool,
                     &mut response,
                 );
@@ -148,6 +175,9 @@ impl InspectorPanel {
         prefabs: &[PrefabAsset],
         selected_prefab_index: Option<usize>,
         prefab_search: &mut String,
+        renaming_prefab_index: Option<usize>,
+        prefab_rename_buffer: &mut String,
+        prefab_rename_should_focus: &mut bool,
         active_tool: Tool,
         response: &mut InspectorResponse,
     ) {
@@ -200,6 +230,9 @@ impl InspectorPanel {
                 prefabs,
                 selected_prefab_index,
                 prefab_search,
+                renaming_prefab_index,
+                prefab_rename_buffer,
+                prefab_rename_should_focus,
                 response,
                 top_rect.height(),
             );
@@ -1232,6 +1265,9 @@ impl InspectorPanel {
         prefabs: &[PrefabAsset],
         selected_prefab_index: Option<usize>,
         prefab_search: &mut String,
+        renaming_prefab_index: Option<usize>,
+        prefab_rename_buffer: &mut String,
+        prefab_rename_should_focus: &mut bool,
         response: &mut InspectorResponse,
         max_list_height: f32,
     ) {
@@ -1299,25 +1335,57 @@ impl InspectorPanel {
                         for index in filtered {
                             let prefab = &prefabs[index];
                             let selected = Some(index) == selected_prefab_index;
-                            let row_response =
-                                Self::draw_prefab_list_row(ui, colors, prefab, selected);
-                            if row_response.clicked() {
+                            let row_output = Self::draw_prefab_list_row(
+                                ui,
+                                colors,
+                                prefab,
+                                selected,
+                                Some(index) == renaming_prefab_index,
+                                prefab_rename_buffer,
+                                prefab_rename_should_focus,
+                            );
+                            if row_output.response.clicked() {
                                 response.select_prefab_index = Some(index);
                             }
-                            if row_response.double_clicked() {
+                            if row_output.response.double_clicked() {
                                 response.edit_prefab_index = Some(index);
                             }
-                            if row_response.secondary_clicked() {
+                            if row_output.response.secondary_clicked() {
                                 response.select_prefab_index = Some(index);
                             }
-                            row_response.context_menu(|ui| {
-                                ui.set_min_width(140.0);
-                                if ui.button("Delete Prefab...").clicked() {
-                                    response.select_prefab_index = Some(index);
-                                    response.delete_prefab_index = Some(index);
-                                    ui.close();
-                                }
-                            });
+                            if row_output.rename_submitted {
+                                response.submit_prefab_rename = true;
+                            }
+                            if row_output.rename_canceled {
+                                response.cancel_prefab_rename = true;
+                            }
+                            if Some(index) != renaming_prefab_index {
+                                row_output.response.context_menu(|ui| {
+                                    ui.set_min_width(140.0);
+                                    if ui.button("Duplicate Prefab").clicked() {
+                                        response.select_prefab_index = Some(index);
+                                        response.duplicate_prefab_index = Some(index);
+                                        ui.close();
+                                    }
+                                    if ui.button("Rename Prefab...").clicked() {
+                                        response.select_prefab_index = Some(index);
+                                        response.start_rename_prefab_index = Some(index);
+                                        ui.close();
+                                    }
+                                    ui.separator();
+                                    if ui
+                                        .button(
+                                            egui::RichText::new("Delete Prefab...")
+                                                .color(colors.accent),
+                                        )
+                                        .clicked()
+                                    {
+                                        response.select_prefab_index = Some(index);
+                                        response.delete_prefab_index = Some(index);
+                                        ui.close();
+                                    }
+                                });
+                            }
                         }
                     });
             });
@@ -1378,7 +1446,10 @@ impl InspectorPanel {
         colors: &ThemeColors,
         prefab: &PrefabAsset,
         selected: bool,
-    ) -> egui::Response {
+        editing: bool,
+        rename_buffer: &mut String,
+        rename_should_focus: &mut bool,
+    ) -> PrefabListRowOutput {
         let width = ui.available_width();
         let (rect, response) = ui.allocate_exact_size(
             egui::vec2(width, PREFAB_LIST_ROW_HEIGHT),
@@ -1430,13 +1501,6 @@ impl InspectorPanel {
         };
 
         ui.painter().text(
-            egui::pos2(rect.left() + PREFAB_LIST_CELL_PAD_X, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            name_label,
-            egui::FontId::proportional(13.0),
-            name_color,
-        );
-        ui.painter().text(
             egui::pos2(rect.right() - PREFAB_LIST_CELL_PAD_X, rect.center().y),
             egui::Align2::RIGHT_CENTER,
             size_label,
@@ -1444,7 +1508,57 @@ impl InspectorPanel {
             size_color,
         );
 
-        response
+        let mut rename_submitted = false;
+        let mut rename_canceled = false;
+        if editing {
+            let text_edit_id = response.id.with("rename");
+            let edit_right =
+                (rect.right() - PREFAB_LIST_CELL_PAD_X - PREFAB_LIST_SIZE_COLUMN_WIDTH - 8.0)
+                    .max(rect.left() + PREFAB_LIST_CELL_PAD_X + 48.0);
+            let edit_rect = egui::Rect::from_min_max(
+                egui::pos2(rect.left() + PREFAB_LIST_CELL_PAD_X - 4.0, rect.top() + 3.0),
+                egui::pos2(edit_right, rect.bottom() - 3.0),
+            );
+            let original_name = prefab.file_stem_name();
+            let text_response = ui.put(
+                edit_rect,
+                egui::TextEdit::singleline(rename_buffer)
+                    .id(text_edit_id)
+                    .desired_width(edit_rect.width())
+                    .margin(egui::Margin::symmetric(6, 4)),
+            );
+            if *rename_should_focus {
+                text_response.request_focus();
+                Self::select_all_text(ui, text_edit_id, rename_buffer);
+                *rename_should_focus = false;
+            }
+
+            let escape_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let lost_focus = text_response.lost_focus();
+            let changed = rename_buffer.trim() != original_name;
+            let escape_cancel = escape_pressed && (text_response.has_focus() || lost_focus);
+            let enter_commit = enter_pressed && (text_response.has_focus() || lost_focus);
+            let focus_loss_commit = lost_focus && !escape_pressed && !enter_pressed && changed;
+            let focus_loss_cancel = lost_focus && !escape_pressed && !enter_pressed && !changed;
+
+            rename_canceled = escape_cancel || focus_loss_cancel;
+            rename_submitted = !rename_canceled && (enter_commit || focus_loss_commit);
+        } else {
+            ui.painter().text(
+                egui::pos2(rect.left() + PREFAB_LIST_CELL_PAD_X, rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                name_label,
+                egui::FontId::proportional(13.0),
+                name_color,
+            );
+        }
+
+        PrefabListRowOutput {
+            response,
+            rename_submitted,
+            rename_canceled,
+        }
     }
 
     fn ellipsize_tail(text: &str, max_chars: usize) -> String {

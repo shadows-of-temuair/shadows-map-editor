@@ -1,12 +1,15 @@
 use eframe::egui;
 
+use crate::document::DocumentKind;
 use crate::panels::MapSizeDialog;
+use crate::panels::MapSizeDialogMode;
 use crate::panels::Tool;
 use crate::theme::{ThemeColors, theme_colors};
 use crate::widgets::tooltip;
 
 const STATUS_BAR_HEIGHT: f32 = 28.0;
 const STATUS_PROGRESS_BAR_SIZE: egui::Vec2 = egui::vec2(112.0, 10.0);
+const STATUS_MESSAGE_FADE_SECONDS: f64 = 0.18;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum StatusBarAction {
@@ -19,6 +22,14 @@ pub enum StatusBarAction {
 #[derive(Default)]
 pub struct StatusBarPanel {
     size_dialog: MapSizeDialog,
+    settled_status_text: String,
+    status_message_animation: Option<StatusMessageAnimation>,
+}
+
+struct StatusMessageAnimation {
+    from_text: String,
+    to_text: String,
+    started_at: f64,
 }
 
 impl StatusBarPanel {
@@ -30,10 +41,94 @@ impl StatusBarPanel {
         self.size_dialog.is_open()
     }
 
+    fn finish_completed_status_animation(&mut self, now: f64) {
+        let finished_text = self
+            .status_message_animation
+            .as_ref()
+            .and_then(|animation| {
+                ((now - animation.started_at) >= STATUS_MESSAGE_FADE_SECONDS)
+                    .then(|| animation.to_text.clone())
+            });
+        if let Some(finished_text) = finished_text {
+            self.settled_status_text = finished_text;
+            self.status_message_animation = None;
+        }
+    }
+
+    fn visible_status_text(&self, now: f64) -> String {
+        self.status_message_animation
+            .as_ref()
+            .map(|animation| {
+                let progress =
+                    ((now - animation.started_at) / STATUS_MESSAGE_FADE_SECONDS).clamp(0.0, 1.0);
+                if progress < 0.5 {
+                    animation.from_text.clone()
+                } else {
+                    animation.to_text.clone()
+                }
+            })
+            .unwrap_or_else(|| self.settled_status_text.clone())
+    }
+
+    fn animated_status_frame(&self, now: f64) -> Option<(String, f32)> {
+        let animation = self.status_message_animation.as_ref()?;
+        let progress =
+            ((now - animation.started_at) / STATUS_MESSAGE_FADE_SECONDS).clamp(0.0, 1.0) as f32;
+        if progress < 0.5 {
+            Some((animation.from_text.clone(), 1.0 - (progress / 0.5)))
+        } else {
+            Some((animation.to_text.clone(), (progress - 0.5) / 0.5))
+        }
+    }
+
+    fn status_label_state(
+        &mut self,
+        ctx: &egui::Context,
+        status_message: &str,
+        accent: egui::Color32,
+    ) -> (String, egui::Color32) {
+        let incoming_text = Self::plain_status_text(status_message);
+        let now = ctx.input(|i| i.time);
+        self.finish_completed_status_animation(now);
+
+        if self.settled_status_text.is_empty() && self.status_message_animation.is_none() {
+            self.settled_status_text = incoming_text.clone();
+        }
+
+        let current_target = self
+            .status_message_animation
+            .as_ref()
+            .map(|animation| animation.to_text.as_str())
+            .unwrap_or(self.settled_status_text.as_str())
+            .to_string();
+        if incoming_text != current_target {
+            let from_text = self.visible_status_text(now);
+            if from_text != incoming_text {
+                self.status_message_animation = Some(StatusMessageAnimation {
+                    from_text,
+                    to_text: incoming_text.clone(),
+                    started_at: now,
+                });
+            } else {
+                self.settled_status_text = incoming_text.clone();
+                self.status_message_animation = None;
+            }
+        }
+
+        if let Some((text, alpha)) = self.animated_status_frame(now) {
+            ctx.request_repaint();
+            return (text, accent.gamma_multiply(alpha));
+        }
+
+        self.settled_status_text = incoming_text.clone();
+        (incoming_text, accent)
+    }
+
     pub fn show(
         &mut self,
         ctx: &egui::Context,
         map: &map::Map,
+        document_kind: DocumentKind,
         current_file_label: &str,
         active_tool: Tool,
         hover_tile: (u16, u16),
@@ -42,6 +137,8 @@ impl StatusBarPanel {
         status_progress: Option<f32>,
     ) -> StatusBarAction {
         let colors = theme_colors();
+        let (status_text, status_color) =
+            self.status_label_state(ctx, status_message, colors.accent);
         let mut action = StatusBarAction::None;
 
         egui::TopBottomPanel::bottom("status_bar")
@@ -81,9 +178,9 @@ impl StatusBarPanel {
 
                     // Status (left, accent)
                     ui.label(
-                        egui::RichText::new(Self::plain_status_text(status_message))
+                        egui::RichText::new(status_text.as_str())
                             .size(13.0)
-                            .color(colors.accent),
+                            .color(status_color),
                     );
 
                     // Right-aligned section
@@ -143,42 +240,58 @@ impl StatusBarPanel {
                             .width(popup_width)
                             .show(|ui| {
                                 ui.spacing_mut().item_spacing = egui::vec2(0.0, 2.0);
-                                let tile_count = map.tiles.len();
-                                let dims = map::all_dimensions(tile_count);
-                                egui::ScrollArea::vertical()
-                                    .max_height(200.0)
-                                    .show(ui, |ui| {
-                                        for (w, h) in dims {
-                                            let is_current = w == map.width && h == map.height;
-                                            let label = format!("{}x{}", w, h);
-                                            let text_color = if is_current {
-                                                colors.accent
-                                            } else {
-                                                colors.text
-                                            };
-                                            let btn = ui.add(
-                                                egui::Button::new(
-                                                    egui::RichText::new(&label)
-                                                        .size(13.0)
-                                                        .color(text_color),
-                                                )
-                                                .fill(egui::Color32::TRANSPARENT)
-                                                .stroke(egui::Stroke::NONE)
-                                                .min_size(egui::vec2(ui.available_width(), 24.0))
-                                                .corner_radius(4.0),
-                                            );
-                                            if btn.clicked() {
-                                                action = StatusBarAction::SetDimensions(w, h);
-                                                egui::Popup::close_id(ui.ctx(), popup_id);
-                                            }
-                                        }
-                                    });
+                                match document_kind {
+                                    DocumentKind::Map => {
+                                        let tile_count = map.tiles.len();
+                                        let dims = map::all_dimensions(tile_count);
+                                        egui::ScrollArea::vertical().max_height(200.0).show(
+                                            ui,
+                                            |ui| {
+                                                for (w, h) in dims {
+                                                    let is_current =
+                                                        w == map.width && h == map.height;
+                                                    let label = format!("{}x{}", w, h);
+                                                    let text_color = if is_current {
+                                                        colors.accent
+                                                    } else {
+                                                        colors.text
+                                                    };
+                                                    let btn = ui.add(
+                                                        egui::Button::new(
+                                                            egui::RichText::new(&label)
+                                                                .size(13.0)
+                                                                .color(text_color),
+                                                        )
+                                                        .fill(egui::Color32::TRANSPARENT)
+                                                        .stroke(egui::Stroke::NONE)
+                                                        .min_size(egui::vec2(
+                                                            ui.available_width(),
+                                                            24.0,
+                                                        ))
+                                                        .corner_radius(4.0),
+                                                    );
+                                                    if btn.clicked() {
+                                                        action =
+                                                            StatusBarAction::SetDimensions(w, h);
+                                                        egui::Popup::close_id(ui.ctx(), popup_id);
+                                                    }
+                                                }
+                                            },
+                                        );
 
-                                ui.add_space(4.0);
-                                ui.separator();
+                                        ui.add_space(4.0);
+                                        ui.separator();
+                                    }
+                                    DocumentKind::Prefab => {}
+                                }
+
+                                let custom_label = match document_kind {
+                                    DocumentKind::Map => "Custom Size...",
+                                    DocumentKind::Prefab => "Resize Canvas...",
+                                };
                                 let custom_btn = ui.add(
                                     egui::Button::new(
-                                        egui::RichText::new("Custom Size...")
+                                        egui::RichText::new(custom_label)
                                             .size(13.0)
                                             .color(colors.text),
                                     )
@@ -225,12 +338,17 @@ impl StatusBarPanel {
                 });
             });
 
+        let (dialog_title, confirm_label, dialog_mode) = match document_kind {
+            DocumentKind::Map => ("Custom Size", "Apply", MapSizeDialogMode::Standard),
+            DocumentKind::Prefab => ("Resize Canvas", "Resize", MapSizeDialogMode::PrefabCanvas),
+        };
         if let Some((width, height)) = self.size_dialog.show(
             ctx,
             "status_custom_size_dialog",
-            "Custom Size",
-            "Apply",
+            dialog_title,
+            confirm_label,
             Some(map),
+            dialog_mode,
         ) {
             action = StatusBarAction::SetDimensions(width, height);
         }

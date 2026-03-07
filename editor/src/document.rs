@@ -5,7 +5,10 @@ use tracing::warn;
 
 use crate::{
     map_list::MapMetadataHint,
-    prefab::{PrefabFile, load_prefab_asset, placement_anchor, sanitize_prefab_name},
+    prefab::{
+        PrefabFile, centered_canvas_offset, load_prefab_asset, placement_anchor,
+        sanitize_prefab_name,
+    },
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -306,6 +309,60 @@ impl MapDocument {
         Ok(())
     }
 
+    pub fn resize_canvas_centered(&mut self, width: u16, height: u16) -> Result<(), String> {
+        self.finish_stroke();
+        if width == 0 || height == 0 {
+            return Err("Width and height must both be at least 1.".to_string());
+        }
+
+        let new_count = width as usize * height as usize;
+        let mut new_tiles = Vec::new();
+        if let Err(err) = new_tiles.try_reserve_exact(new_count) {
+            return Err(format!(
+                "Unable to resize {} canvas to {}x{} ({} tiles): {}",
+                self.kind.noun(),
+                width,
+                height,
+                new_count,
+                err
+            ));
+        }
+        new_tiles.resize(new_count, map::Tile::default());
+
+        let old_width = self.map.width;
+        let old_height = self.map.height;
+        let old_tiles = self.map.tiles.clone();
+        let col_offset = centered_canvas_offset(old_width, width);
+        let row_offset = centered_canvas_offset(old_height, height);
+
+        for old_row in 0..old_height {
+            for old_col in 0..old_width {
+                let new_col = i32::from(old_col) + col_offset;
+                let new_row = i32::from(old_row) + row_offset;
+                if new_col < 0
+                    || new_row < 0
+                    || new_col >= i32::from(width)
+                    || new_row >= i32::from(height)
+                {
+                    continue;
+                }
+
+                let src_idx = old_row as usize * old_width as usize + old_col as usize;
+                let dst_idx = new_row as usize * width as usize + new_col as usize;
+                new_tiles[dst_idx] = old_tiles[src_idx];
+            }
+        }
+
+        self.map.width = width;
+        self.map.height = height;
+        self.map.tiles = new_tiles;
+        self.camera = Camera::default();
+        self.dirty = true;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        Ok(())
+    }
+
     pub fn display_name(&self) -> String {
         match self.kind {
             DocumentKind::Map => {
@@ -385,6 +442,18 @@ impl MapDocument {
                 }
             }
         }
+    }
+
+    pub fn update_prefab_path(&mut self, path: PathBuf) {
+        if self.kind != DocumentKind::Prefab {
+            return;
+        }
+
+        self.name_hint = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(|stem| stem.to_string());
+        self.path = Some(path);
     }
 
     pub fn clear_history(&mut self) {
@@ -679,6 +748,42 @@ mod tests {
         for idx in 75..400 {
             assert_eq!(doc.map.tiles[idx].ground, 0);
         }
+    }
+
+    #[test]
+    fn resize_canvas_centered_grows_prefab_around_existing_tiles() {
+        let mut doc = MapDocument::new_prefab(2, 2);
+        doc.map.tiles[0].ground = 1;
+        doc.map.tiles[1].ground = 2;
+        doc.map.tiles[2].left_wall = 3;
+        doc.map.tiles[3].right_wall = 4;
+
+        doc.resize_canvas_centered(4, 4).unwrap();
+
+        assert_eq!(doc.map.width, 4);
+        assert_eq!(doc.map.height, 4);
+        assert_eq!(doc.map.tiles[1 * 4 + 1].ground, 1);
+        assert_eq!(doc.map.tiles[1 * 4 + 2].ground, 2);
+        assert_eq!(doc.map.tiles[2 * 4 + 1].left_wall, 3);
+        assert_eq!(doc.map.tiles[2 * 4 + 2].right_wall, 4);
+    }
+
+    #[test]
+    fn resize_canvas_centered_shrinks_prefab_and_clips_edges() {
+        let mut doc = MapDocument::new_prefab(4, 4);
+        doc.map.tiles[0].ground = 1;
+        doc.map.tiles[1 * 4 + 1].ground = 2;
+        doc.map.tiles[2 * 4 + 2].left_wall = 3;
+        doc.map.tiles[3 * 4 + 3].right_wall = 4;
+
+        doc.resize_canvas_centered(2, 2).unwrap();
+
+        assert_eq!(doc.map.width, 2);
+        assert_eq!(doc.map.height, 2);
+        assert_eq!(doc.map.tiles[0].ground, 2);
+        assert_eq!(doc.map.tiles[3].left_wall, 3);
+        assert!(doc.map.tiles.iter().all(|tile| tile.right_wall != 4));
+        assert!(doc.map.tiles.iter().all(|tile| tile.ground != 1));
     }
 
     #[test]
