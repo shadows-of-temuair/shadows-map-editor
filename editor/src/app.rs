@@ -26,6 +26,8 @@ use crate::prefab::{self, PrefabAsset};
 use crate::shape::{self, ShapeKind};
 use crate::theme;
 
+const SELECTION_CLIPBOARD_SENTINEL: &str = "__shadows_map_editor_selection__";
+
 enum PendingDiscardAction {
     CloseTab { index: usize },
     CloseWindow { remaining_docs: Vec<usize> },
@@ -1272,7 +1274,7 @@ impl EditorApp {
     }
 
     fn begin_prefab_create_flow(&mut self) -> bool {
-        let Some(selection) = self.documents[self.active_tab].selection() else {
+        let Some(selection) = self.effective_selection_for_any_occupied_tile() else {
             return false;
         };
 
@@ -2001,6 +2003,12 @@ impl EditorApp {
         ) = ctx.input(|i| {
             let cmd = i.modifiers.command;
             let shift = i.modifiers.shift;
+            let cut_event = i.events.iter().any(|event| matches!(event, egui::Event::Cut));
+            let copy_event = i.events.iter().any(|event| matches!(event, egui::Event::Copy));
+            let paste_event = i
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::Paste(_)));
 
             // Tool shortcuts (no modifiers)
             let tool = if !keyboard_captured && !cmd && !shift {
@@ -2076,9 +2084,11 @@ impl EditorApp {
             let save_as = cmd && shift && i.key_pressed(egui::Key::S);
             let undo = cmd && !shift && i.key_pressed(egui::Key::Z);
             let redo = cmd && shift && i.key_pressed(egui::Key::Z);
-            let cut = cmd && !shift && i.key_pressed(egui::Key::X);
-            let copy = cmd && !shift && i.key_pressed(egui::Key::C);
-            let paste = cmd && !shift && i.key_pressed(egui::Key::V);
+            let cut = !keyboard_captured && (cut_event || (cmd && !shift && i.key_pressed(egui::Key::X)));
+            let copy =
+                !keyboard_captured && (copy_event || (cmd && !shift && i.key_pressed(egui::Key::C)));
+            let paste =
+                !keyboard_captured && (paste_event || (cmd && !shift && i.key_pressed(egui::Key::V)));
 
             (
                 cmd && !shift && i.key_pressed(egui::Key::N),
@@ -2190,10 +2200,14 @@ impl EditorApp {
         let shift_held = ctx.input(|i| i.modifiers.shift);
         let action_layers = self.selection_action_layers(shift_held);
         if cut {
-            let _ = self.cut_active_selection_to_clipboard(action_layers);
+            if self.cut_active_selection_to_clipboard(action_layers) {
+                ctx.copy_text(SELECTION_CLIPBOARD_SENTINEL.to_string());
+            }
         }
         if copy {
-            let _ = self.copy_active_selection_to_clipboard(action_layers);
+            if self.copy_active_selection_to_clipboard(action_layers) {
+                ctx.copy_text(SELECTION_CLIPBOARD_SENTINEL.to_string());
+            }
         }
         if paste && self.selection_clipboard.is_some() {
             self.paste_preview_active = true;
@@ -2634,14 +2648,32 @@ impl eframe::App for EditorApp {
                     original_selection: selection,
                     grab_offset: (tile.0 - min_col, tile.1 - min_row),
                     preview_map: self.documents[self.active_tab].selection_map(selection),
+                    created_from_empty: false,
                 });
             } else {
-                let allow_single_tile = current_selection.is_none();
-                self.selection_drag_mode = Some(SelectionDragMode::Selecting { allow_single_tile });
-                if allow_single_tile {
-                    self.documents[self.active_tab]
-                        .set_selection(Some(TileSelection::from_points(tile, tile)));
+                let single_tile_selection = TileSelection::from_points(tile, tile);
+                let convenience_drag_layers = if shift_held {
+                    selection_duplicate_layers
                 } else {
+                    selection_move_layers
+                };
+                let start_single_tile_drag = current_selection.is_none()
+                    && Self::tile_has_selection_layers(
+                        &self.documents[self.active_tab].map,
+                        tile,
+                        convenience_drag_layers,
+                    );
+                if start_single_tile_drag {
+                    self.documents[self.active_tab].set_selection(Some(single_tile_selection));
+                    self.selection_drag_mode = Some(SelectionDragMode::Moving {
+                        original_selection: single_tile_selection,
+                        grab_offset: (0, 0),
+                        preview_map: self.documents[self.active_tab]
+                            .selection_map(single_tile_selection),
+                        created_from_empty: true,
+                    });
+                } else {
+                    self.selection_drag_mode = Some(SelectionDragMode::Selecting);
                     self.documents[self.active_tab].set_selection(None);
                 }
             }
@@ -2652,8 +2684,8 @@ impl eframe::App for EditorApp {
                 self.selection_drag_mode.as_ref(),
             ) {
                 match mode {
-                    SelectionDragMode::Selecting { allow_single_tile } => {
-                        if *allow_single_tile || tile != start {
+                    SelectionDragMode::Selecting => {
+                        if tile != start {
                             self.documents[self.active_tab]
                                 .set_selection(Some(TileSelection::from_points(start, tile)));
                         } else {
@@ -2686,10 +2718,14 @@ impl eframe::App for EditorApp {
             self.documents[self.active_tab].set_selection(None);
         }
         if vp_result.cut_selection_requested {
-            let _ = self.cut_active_selection_to_clipboard(selection_action_layers);
+            if self.cut_active_selection_to_clipboard(selection_action_layers) {
+                ctx.copy_text(SELECTION_CLIPBOARD_SENTINEL.to_string());
+            }
         }
         if vp_result.copy_selection_requested {
-            let _ = self.copy_active_selection_to_clipboard(selection_action_layers);
+            if self.copy_active_selection_to_clipboard(selection_action_layers) {
+                ctx.copy_text(SELECTION_CLIPBOARD_SENTINEL.to_string());
+            }
         }
         if vp_result.activate_paste_preview && self.selection_clipboard.is_some() {
             self.paste_preview_active = true;
@@ -2822,10 +2858,13 @@ impl eframe::App for EditorApp {
         let primary_down = ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
         if self.active_tool == Tool::Select && !primary_down {
             if let Some(SelectionDragMode::Moving {
-                original_selection, ..
+                original_selection,
+                created_from_empty,
+                ..
             }) = self.selection_drag_mode.as_ref()
             {
                 let original_selection = *original_selection;
+                let created_from_empty = *created_from_empty;
                 let preview_selection = doc.selection().unwrap_or(original_selection);
                 let (preview_min_col, preview_min_row, _, _) =
                     preview_selection.normalized_bounds();
@@ -2868,7 +2907,11 @@ impl eframe::App for EditorApp {
                         }
                     }
                 } else {
-                    doc.set_selection(Some(original_selection));
+                    if created_from_empty {
+                        doc.set_selection(None);
+                    } else {
+                        doc.set_selection(Some(original_selection));
+                    }
                 }
             }
             self.selection_drag_start_tile = None;

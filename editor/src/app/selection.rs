@@ -43,17 +43,43 @@ pub(super) struct SelectionClipboard {
 
 #[derive(Clone)]
 pub(super) enum SelectionDragMode {
-    Selecting {
-        allow_single_tile: bool,
-    },
+    Selecting,
     Moving {
         original_selection: TileSelection,
         grab_offset: (u16, u16),
         preview_map: map::Map,
+        created_from_empty: bool,
     },
 }
 
 impl EditorApp {
+    pub(super) fn effective_selection_for_layers(
+        &self,
+        layers: LayerVisibility,
+    ) -> Option<TileSelection> {
+        self.documents[self.active_tab]
+            .selection()
+            .or_else(|| {
+                let tile = self.hover_tile;
+                Self::tile_has_selection_layers(&self.documents[self.active_tab].map, tile, layers)
+                    .then_some(TileSelection::from_points(tile, tile))
+            })
+    }
+
+    pub(super) fn effective_selection_for_any_occupied_tile(&self) -> Option<TileSelection> {
+        self.documents[self.active_tab]
+            .selection()
+            .or_else(|| {
+                let tile = self.hover_tile;
+                Self::tile_has_selection_layers(
+                    &self.documents[self.active_tab].map,
+                    tile,
+                    LayerVisibility::default(),
+                )
+                .then_some(TileSelection::from_points(tile, tile))
+            })
+    }
+
     pub(super) fn selection_action_layers(&self, shift_held: bool) -> LayerVisibility {
         selection_action_layers_for_visibility(self.layer_visibility, shift_held)
     }
@@ -67,7 +93,7 @@ impl EditorApp {
     }
 
     pub(super) fn clear_active_selection_layers(&mut self, action_layers: LayerVisibility) -> bool {
-        let Some(selection) = self.documents[self.active_tab].selection() else {
+        let Some(selection) = self.effective_selection_for_layers(action_layers) else {
             return false;
         };
 
@@ -89,7 +115,7 @@ impl EditorApp {
         &mut self,
         action_layers: LayerVisibility,
     ) -> bool {
-        let Some(selection) = self.documents[self.active_tab].selection() else {
+        let Some(selection) = self.effective_selection_for_layers(action_layers) else {
             self.status_message = "No selection to copy.".to_string();
             return false;
         };
@@ -100,6 +126,10 @@ impl EditorApp {
 
         let copied = self.documents[self.active_tab]
             .selection_map_for_visible_layers(selection, action_layers);
+        let Some(copied) = crate::prefab::trimmed_map(&copied, true) else {
+            self.status_message = "No visible tiles available to copy.".to_string();
+            return false;
+        };
         let (width, height) = (copied.width, copied.height);
         self.selection_clipboard = Some(SelectionClipboard {
             map: copied,
@@ -114,7 +144,7 @@ impl EditorApp {
         &mut self,
         action_layers: LayerVisibility,
     ) -> bool {
-        let Some(selection) = self.documents[self.active_tab].selection() else {
+        let Some(selection) = self.effective_selection_for_layers(action_layers) else {
             self.status_message = "No selection to cut.".to_string();
             return false;
         };
@@ -125,6 +155,10 @@ impl EditorApp {
 
         let copied = self.documents[self.active_tab]
             .selection_map_for_visible_layers(selection, action_layers);
+        let Some(copied) = crate::prefab::trimmed_map(&copied, true) else {
+            self.status_message = "No visible tiles available to cut.".to_string();
+            return false;
+        };
         let (width, height) = (copied.width, copied.height);
         self.selection_clipboard = Some(SelectionClipboard {
             map: copied,
@@ -132,6 +166,9 @@ impl EditorApp {
         });
         self.paste_preview_active = false;
         self.documents[self.active_tab].clear_selection_visible_layers(selection, action_layers);
+        self.documents[self.active_tab].set_selection(None);
+        self.selection_drag_start_tile = None;
+        self.selection_drag_mode = None;
         self.status_message = format!("Cut selection {}x{}.", width, height);
         true
     }
@@ -202,6 +239,20 @@ impl EditorApp {
             PaintLayer::LeftWall => tile.left_wall,
             PaintLayer::RightWall => tile.right_wall,
         }
+    }
+
+    pub(super) fn tile_has_selection_layers(
+        map: &map::Map,
+        tile: (u16, u16),
+        layers: LayerVisibility,
+    ) -> bool {
+        let Some(tile) = map.get(tile.0, tile.1) else {
+            return false;
+        };
+
+        (layers.ground && tile.ground != 0)
+            || (layers.left_wall && tile.left_wall != 0)
+            || (layers.right_wall && tile.right_wall != 0)
     }
 }
 

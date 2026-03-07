@@ -177,14 +177,18 @@ impl ViewportPanel {
                 }
 
                 let overlay_rect = Self::overlay_rect(rect);
-                let viewport_primary_down = response.is_pointer_button_down_on()
-                    && ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
+                let global_primary_down =
+                    ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
+                let viewport_primary_down =
+                    response.is_pointer_button_down_on() && global_primary_down;
                 let primary_pressed = interaction_enabled
                     && !context_menu_open
                     && response.contains_pointer()
                     && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
-                let primary_down =
-                    interaction_enabled && !context_menu_open && viewport_primary_down;
+                let primary_down = interaction_enabled
+                    && !context_menu_open
+                    && global_primary_down
+                    && (viewport_primary_down || selection_drag_start_tile.is_some());
                 let pointer_interact_pos = ui.input(|i| i.pointer.interact_pos());
                 let selection_press_valid = active_tool == Tool::Select
                     && !paste_preview_active
@@ -321,6 +325,20 @@ impl ViewportPanel {
                     if selection_drag_active || !overlay_rect.contains(pointer_pos) {
                         let tile = if selection_drag_active {
                             Self::screen_to_tile_clamped(pointer_pos, origin, half_w, half_h, map)
+                        } else if active_tool == Tool::Select {
+                            current_selection
+                                .and_then(|selection| {
+                                    Self::selected_tile_at_screen_pos(
+                                        selection,
+                                        pointer_pos,
+                                        origin,
+                                        half_w,
+                                        half_h,
+                                    )
+                                })
+                                .or_else(|| {
+                                    Self::screen_to_tile(pointer_pos, origin, half_w, half_h, map)
+                                })
                         } else {
                             Self::screen_to_tile(pointer_pos, origin, half_w, half_h, map)
                         };
@@ -799,7 +817,11 @@ impl ViewportPanel {
                 let selection_context_tile = ui
                     .ctx()
                     .data(|data| data.get_temp::<(u16, u16)>(selection_context_tile_id));
-                let can_create_prefab = current_selection
+                let implicit_context_selection = selection_context_tile
+                    .map(|tile| TileSelection::from_points(tile, tile))
+                    .filter(|selection| Self::selection_contains_tiles(map, *selection));
+                let context_selection = current_selection.or(implicit_context_selection);
+                let can_create_prefab = context_selection
                     .map(|selection| Self::selection_contains_tiles(map, selection))
                     .unwrap_or(false);
                 let show_selection_context_menu = interaction_enabled
@@ -815,7 +837,7 @@ impl ViewportPanel {
                         ui.set_min_width(190.0);
                         ui.add_space(2.0);
 
-                        if active_tool == Tool::Select && current_selection.is_some() {
+                        if active_tool == Tool::Select && context_selection.is_some() {
                             if Self::context_menu_action(
                                 ui,
                                 CONTEXT_ICON_CUT,
@@ -864,7 +886,7 @@ impl ViewportPanel {
                             ui.close();
                         }
 
-                        if active_tool == Tool::Select && current_selection.is_some() {
+                        if active_tool == Tool::Select && context_selection.is_some() {
                             if Self::context_menu_action(
                                 ui,
                                 CONTEXT_ICON_CREATE_PREFAB,
@@ -1582,6 +1604,42 @@ impl ViewportPanel {
         let max_row = i32::from(map.height.saturating_sub(1));
 
         Some((col.clamp(0, max_col) as u16, row.clamp(0, max_row) as u16))
+    }
+
+    fn selected_tile_at_screen_pos(
+        selection: TileSelection,
+        screen_pos: egui::Pos2,
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+    ) -> Option<(u16, u16)> {
+        let (min_col, min_row, max_col, max_row) = selection.normalized_bounds();
+        for row in min_row..=max_row {
+            for col in min_col..=max_col {
+                if !selection.contains((col, row)) {
+                    continue;
+                }
+                if Self::point_in_tile_diamond(screen_pos, col, row, origin, half_w, half_h) {
+                    return Some((col, row));
+                }
+            }
+        }
+        None
+    }
+
+    fn point_in_tile_diamond(
+        screen_pos: egui::Pos2,
+        col: u16,
+        row: u16,
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+    ) -> bool {
+        let cx = origin.x + (col as f32 - row as f32) * half_w;
+        let cy = origin.y + (col as f32 + row as f32) * half_h;
+        let dx = (screen_pos.x - cx).abs();
+        let dy = (screen_pos.y - cy).abs();
+        (dx / half_w) + (dy / half_h) <= 1.0
     }
 
     fn draw_tile_highlight(

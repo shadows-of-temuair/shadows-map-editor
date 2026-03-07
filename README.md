@@ -82,7 +82,7 @@ Managing prefabs:
 - The prefab list supports live search by partial filename match
 - List rows show the prefab file stem and occupied dimensions, not the full canvas size
 - Double-click a prefab row, or use `Edit` from the preview header, to open that prefab in a tab
-- Right-click a prefab row for `Delete Prefab...`, which asks for confirmation before removing the local `.ron`
+- Right-click a prefab row for rename, duplicate, or `Delete Prefab`, which asks for confirmation before removing the local `.ron`
 
 Placing prefabs:
 - The bottom inspector pane shows a rendered preview of the selected prefab using the loaded ground and wall assets
@@ -134,6 +134,7 @@ If `maps.ron` exists in the project root, the editor uses it as map metadata:
 
 ### Editing
 
+- **V** — Switch to Select tool
 - **B** — Switch to Brush tool
 - **L** — Switch to Line tool
 - **P** — Switch to Prefab tool
@@ -143,6 +144,18 @@ If `maps.ron` exists in the project root, the editor uses it as map metadata:
 - **U** — Switch to Shape tool
 - **T** — Toggle tile paint layer between Ground and Wall (preserves the current wall side)
 - **Q** — Toggle wall paint target side (Left/Right) while in Wall mode
+- **Left drag (Select)** — Create a rectangular selection, with automatic edge-pan near viewport bounds
+- **Click outside selection (Select)** — Clear the current selection
+- **Esc (Select/Paste preview)** — Clear the selection and cancel paste preview if active
+- **Delete / Backspace (Select)** — Clear the selected area on the active visible selection layers
+- **Cmd+C / Cmd+X (Select)** — Copy or cut the current selection using the current visible-layer rules
+- **Cmd+V** — Start paste preview from the selection clipboard
+- **Right click (viewport)** — Open the selection/clipboard context menu; `Paste` is available in any tool when the clipboard has content
+- **Paste preview** — Shows a translucent ghost and orange footprint; left click places it, `Shift+left click` keeps the preview active for repeated placement
+- **Left drag inside selection** — Move the selection with a live preview and full undo/redo support
+- **Shift+Left drag inside selection** — Duplicate the selection to a new location and keep the new copy selected for chained duplication
+- **Selection layer rules** — Hidden layers are never cut, copied, deleted, moved, duplicated, or erased; when any wall layer is visible, selection actions default to walls unless only ground is visible
+- **Create Prefab... (selection menu)** — Prompts for a prefab name, optionally includes ground, and saves a trimmed prefab using only the occupied bounds
 - **Left click (Brush)** — Paint the hovered tile
 - **Left drag (Brush)** — Paint continuously while holding the mouse button
 - **Shift+Left click (Brush)** — Draw a line from the last brush click to the clicked tile (does nothing if there is no previous brush click)
@@ -155,15 +168,15 @@ If `maps.ron` exists in the project root, the editor uses it as map metadata:
 - **Prefab tool** — Uses the selected prefab from the inspector's `Prefab Library`
 - **Left click (Prefab)** — Place the selected prefab centered on the hovered tile using the occupied prefab bounds, with live translucent preview
 - **Left click (Eyedropper)** — Pick the hovered value for the active palette mode (ground in Ground mode, left wall in Wall mode)
-- **Shift+Left click (Eyedropper)** — In Wall mode, pick the hovered right wall instead of left wall
+- **Wall eyedropper target** — Uses the current wall target side (toggle with `Q`)
 - **Eyedropper hover highlight** — Shows exactly which ground/wall target will be sampled before clicking
-- **Alt/Option (hold)** — Temporarily use Eyedropper while held (supports the same Shift behavior)
+- **Alt/Option (hold)** — Temporarily use Eyedropper while held; quick-picking from Select switches to Brush afterward
 - **Prefab tool inspector** — Replaces the tile palette with the prefab browser
 - **Search prefabs** — Filters the prefab list by partial filename match as you type
 - **Prefab list rows** — Show the prefab file stem and the occupied dimensions, not the full canvas size
 - **New** — Create a new prefab tab
 - **Import** — Pick a `.ron` prefab file and copy it into the local `prefabs/` registry
-- **Right click prefab row** — Open prefab actions, including delete with confirmation
+- **Right click prefab row** — Open prefab actions for rename, duplicate, and delete
 - **Preview** — The inspector bottom panel shows a rendered ground+wall preview of the selected prefab, scaled to fit
 
 ### Export

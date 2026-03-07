@@ -4,6 +4,31 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] - 2026-03-07
+
+### Added
+- Rectangular tile selection with edge auto-pan, selection dimensions in the status bar, and keyboard delete/backspace support for clearing the selected active layer.
+- Viewport selection actions for cut, copy, paste preview placement, create prefab from selection, duplicate-drag, and move previews with undo/redo support.
+- Clipboard shortcuts (`Cmd+X`, `Cmd+C`, `Cmd+V`) plus multi-paste support while holding `Shift` during placement.
+- Overwrite warnings for prefab, paste, move, and duplicate previews, including red tile overlays and wall warning outlines on clobbered destination walls.
+- Richer selection visualization with pulsing tile highlights under walls, merged white wall silhouette outlines, and improved eyedropper wall targeting feedback.
+- Modal and inspector presentation polish, including iconized dialog titles, iconized viewport context-menu actions with shortcut labels, and section icons for `Prefabs` and `Tile Palette`.
+
+### Changed
+- The editor now defaults to the `Select` tool on startup.
+- Selection actions now follow visibility-aware layer rules so hidden layers are not cut, copied, deleted, or erased, and wall-visible workflows prefer wall-only manipulation by default.
+- Paste now behaves like prefab placement with a ghost preview and no post-place selection, while shift-drag on a selection duplicates instead of changing layer inclusion.
+- Creating prefabs from a selection now prompts for a name, optionally excludes ground by default, and trims the saved prefab to its actual occupied bounds.
+- Quick eyedropper use from `Select` now switches into brush mode after picking, and wall-side sampling follows the current left/right wall target instead of `Shift`.
+- Inspector resizing and prefab preview interactions now avoid leaking input into the viewport.
+
+### Fixed
+- Resizing the inspector no longer triggers viewport scrolling or selection edge-pan when dragging near the map boundary.
+- Clicking on the map outside the current selection clears it reliably again.
+- Viewport context-menu clicks no longer fight the map beneath them, and context-menu sizing/alignment is now stable.
+- Paste preview anchoring is now consistent and no longer collapses unexpectedly to a `1x1` placement footprint.
+- Tab-map toggle hotkey handling is no longer lost to transient egui keyboard focus state.
+
 ## [0.4.0] - 2026-03-07
 
 ### Added
