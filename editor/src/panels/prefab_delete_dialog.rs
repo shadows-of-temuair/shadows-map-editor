@@ -44,6 +44,7 @@ impl PrefabDeleteDialog {
         let mut action = PrefabDeleteDialogAction::None;
 
         egui::Area::new(egui::Id::new("prefab_delete_backdrop"))
+            .order(egui::Order::Middle)
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
                 let response = ui.allocate_response(screen.size(), egui::Sense::click());
@@ -58,6 +59,7 @@ impl PrefabDeleteDialog {
             });
 
         egui::Window::new("")
+            .order(egui::Order::Foreground)
             .id(egui::Id::new("prefab_delete_dialog"))
             .title_bar(false)
             .collapsible(false)

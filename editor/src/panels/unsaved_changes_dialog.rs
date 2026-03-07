@@ -45,6 +45,7 @@ impl UnsavedChangesDialog {
         let mut action = UnsavedChangesDialogAction::None;
 
         egui::Area::new(egui::Id::new("unsaved_changes_backdrop"))
+            .order(egui::Order::Middle)
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
                 let response = ui.allocate_response(screen.size(), egui::Sense::click());
@@ -59,6 +60,7 @@ impl UnsavedChangesDialog {
             });
 
         egui::Window::new("")
+            .order(egui::Order::Foreground)
             .id(egui::Id::new("unsaved_changes_dialog"))
             .title_bar(false)
             .collapsible(false)

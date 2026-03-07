@@ -46,6 +46,10 @@ impl PrefabCreateDialog {
         self.should_focus_name = false;
     }
 
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
     pub fn restore_after_error(&mut self, name: String, include_ground: bool, error: String) {
         self.open = true;
         self.name = name;
@@ -70,6 +74,7 @@ impl PrefabCreateDialog {
         let mut action = PrefabCreateDialogAction::None;
 
         egui::Area::new(egui::Id::new("prefab_create_backdrop"))
+            .order(egui::Order::Middle)
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
                 let response = ui.allocate_response(screen.size(), egui::Sense::click());
@@ -84,6 +89,7 @@ impl PrefabCreateDialog {
             });
 
         egui::Window::new("")
+            .order(egui::Order::Foreground)
             .id(egui::Id::new("prefab_create_dialog"))
             .title_bar(false)
             .collapsible(false)

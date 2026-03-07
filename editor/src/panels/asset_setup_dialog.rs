@@ -46,6 +46,7 @@ impl AssetSetupDialog {
         let mut action = AssetSetupDialogAction::None;
 
         egui::Area::new(egui::Id::new("asset_setup_backdrop"))
+            .order(egui::Order::Middle)
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
                 let _ = ui.allocate_response(screen.size(), egui::Sense::click());
@@ -57,6 +58,7 @@ impl AssetSetupDialog {
             });
 
         egui::Window::new("")
+            .order(egui::Order::Foreground)
             .id(egui::Id::new("asset_setup_dialog"))
             .title_bar(false)
             .collapsible(false)

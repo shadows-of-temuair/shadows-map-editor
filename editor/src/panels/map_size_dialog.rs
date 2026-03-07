@@ -59,6 +59,7 @@ impl MapSizeDialog {
 
         // Dim the background and allow click-away dismissal.
         egui::Area::new(egui::Id::new((id, "backdrop")))
+            .order(egui::Order::Middle)
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
                 let response = ui.allocate_response(screen.size(), egui::Sense::click());
@@ -74,6 +75,7 @@ impl MapSizeDialog {
             });
 
         egui::Window::new("")
+            .order(egui::Order::Foreground)
             .id(egui::Id::new(id))
             .title_bar(false)
             .open(&mut open)

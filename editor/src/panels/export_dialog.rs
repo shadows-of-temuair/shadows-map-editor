@@ -88,6 +88,7 @@ impl ExportDialog {
 
         // Dim the background
         egui::Area::new(egui::Id::new("export_backdrop"))
+            .order(egui::Order::Middle)
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
                 let response = ui.allocate_response(screen.size(), egui::Sense::click());
@@ -102,6 +103,7 @@ impl ExportDialog {
             });
 
         egui::Window::new("")
+            .order(egui::Order::Foreground)
             .title_bar(false)
             .collapsible(false)
             .resizable(false)

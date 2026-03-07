@@ -43,6 +43,7 @@ pub struct ViewportResult {
     pub selection_drag_tile: Option<(u16, u16)>,
     pub cut_selection_requested: bool,
     pub copy_selection_requested: bool,
+    pub clear_selection_requested: bool,
     pub activate_paste_preview: bool,
     pub paste_preview_clicked_tile: Option<(u16, u16)>,
     pub cancel_paste_preview: bool,
@@ -63,6 +64,7 @@ pub struct SelectionMovePreview<'a> {
     pub map: &'a map::Map,
     pub top_left: (u16, u16),
     pub layers: LayerVisibility,
+    pub ignore_overwrite_region: Option<TileSelection>,
 }
 
 #[derive(Clone, Copy)]
@@ -74,11 +76,18 @@ pub enum EyedropperPick {
 
 pub struct ViewportPanel;
 
+#[derive(Clone, Copy)]
+struct WallOutlineSprite {
+    source_rect: (u32, u32, u32, u32),
+    screen_rect: egui::Rect,
+}
+
 impl ViewportPanel {
     pub fn show(
         ctx: &egui::Context,
         map: &map::Map,
         camera: &mut Camera,
+        interaction_enabled: bool,
         active_tool: Tool,
         active_shape: ShapeKind,
         paint_layer: PaintLayer,
@@ -123,9 +132,13 @@ impl ViewportPanel {
                 let response = ui.interact(
                     rect,
                     ui.id().with("viewport"),
-                    egui::Sense::click_and_drag(),
+                    if interaction_enabled {
+                        egui::Sense::click_and_drag()
+                    } else {
+                        egui::Sense::hover()
+                    },
                 );
-                let context_menu_open = response.context_menu_opened();
+                let context_menu_open = interaction_enabled && response.context_menu_opened();
                 let mut cursor_icon = if response.hovered() {
                     Some(egui::CursorIcon::Default)
                 } else {
@@ -133,8 +146,9 @@ impl ViewportPanel {
                 };
 
                 // Right-click or middle-click drag panning
-                let is_mouse_panning = response.dragged_by(egui::PointerButton::Secondary)
-                    || response.dragged_by(egui::PointerButton::Middle);
+                let is_mouse_panning = interaction_enabled
+                    && (response.dragged_by(egui::PointerButton::Secondary)
+                        || response.dragged_by(egui::PointerButton::Middle));
                 if is_mouse_panning {
                     camera.offset -= response.drag_delta();
                     cursor_icon = Some(egui::CursorIcon::Grabbing);
@@ -142,7 +156,7 @@ impl ViewportPanel {
 
                 // Mouse wheel zoom (only when the viewport is hovered).
                 // This prevents map zoom from triggering while scrolling side panels.
-                if response.hovered() {
+                if interaction_enabled && response.hovered() {
                     let scroll = ui.input(|i| i.smooth_scroll_delta.y);
                     if scroll != 0.0 {
                         let old_zoom = camera.zoom;
@@ -154,12 +168,12 @@ impl ViewportPanel {
                 }
 
                 let overlay_rect = Self::overlay_rect(rect);
-                let primary_pressed =
-                    !context_menu_open
-                        && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
-                let primary_down =
-                    !context_menu_open
-                        && ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
+                let primary_pressed = interaction_enabled
+                    && !context_menu_open
+                    && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
+                let primary_down = interaction_enabled
+                    && !context_menu_open
+                    && ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
                 let pointer_interact_pos = ui.input(|i| i.pointer.interact_pos());
                 let selection_press_valid = active_tool == Tool::Select
                     && !paste_preview_active
@@ -173,6 +187,7 @@ impl ViewportPanel {
                     && (selection_drag_start_tile.is_some() || selection_press_valid);
 
                 if active_tool == Tool::Select
+                    && interaction_enabled
                     && !paste_preview_active
                     && primary_down
                     && selection_drag_start_tile.is_some()
@@ -188,7 +203,9 @@ impl ViewportPanel {
                 }
 
                 // Arrow key panning (uses OS key repeat)
-                Self::handle_arrow_keys(ui, camera);
+                if interaction_enabled {
+                    Self::handle_arrow_keys(ui, camera);
+                }
 
                 // Clamp camera to bounds
                 Self::clamp_camera(camera, map, rect);
@@ -209,6 +226,30 @@ impl ViewportPanel {
                     viewport_center.x - camera.offset.x - map_center_x,
                     viewport_center.y - camera.offset.y - map_center_y,
                 );
+                let under_wall_selection = Self::under_wall_selection(
+                    response.hovered(),
+                    map,
+                    active_tool,
+                    paste_preview_active,
+                    current_selection,
+                    selection_move_active,
+                    selection_drag_active,
+                    selection_drag_start_tile,
+                    pointer_interact_pos,
+                    rect,
+                    overlay_rect,
+                    origin,
+                    half_w,
+                    half_h,
+                );
+                let selection_pulse = Self::selection_pulse_opacity(ctx);
+                if active_tool == Tool::Select
+                    && !paste_preview_active
+                    && (current_selection.is_some()
+                        || (selection_drag_active && !selection_move_active))
+                {
+                    ctx.request_repaint();
+                }
 
                 // Draw all tiles in isometric depth order (back-to-front).
                 // For each tile: ground, then left wall, then right wall.
@@ -226,6 +267,8 @@ impl ViewportPanel {
                     half_h,
                     rect,
                     layers,
+                    under_wall_selection,
+                    selection_pulse,
                 );
 
                 // Draw grid overlay
@@ -254,7 +297,9 @@ impl ViewportPanel {
                 let mut selection_preview = None;
 
                 // Mouse → tile hover and click selection
-                let pointer_pos = if selection_drag_active {
+                let pointer_pos = if !interaction_enabled {
+                    None
+                } else if selection_drag_active {
                     pointer_interact_pos.map(|pos| Self::clamp_point_to_rect(pos, rect.shrink(1.0)))
                 } else {
                     response.hover_pos()
@@ -448,6 +493,17 @@ impl ViewportPanel {
                                     Tool::Stamp => {
                                         if let Some(prefab) = stamp_prefab {
                                             cursor_icon = Some(egui::CursorIcon::Crosshair);
+                                            Self::draw_prefab_wall_overwrite_preview(
+                                                &painter,
+                                                map,
+                                                prefab,
+                                                (col, row),
+                                                origin,
+                                                half_w,
+                                                half_h,
+                                                wall_atlas,
+                                                wall_texture,
+                                            );
                                             Self::draw_prefab_preview(
                                                 &painter,
                                                 prefab,
@@ -552,6 +608,12 @@ impl ViewportPanel {
                                     }
                                 }
                             }
+                        } else if active_tool == Tool::Select
+                            && !paste_preview_active
+                            && primary_pressed
+                            && current_selection.is_some()
+                        {
+                            result.clear_selection_requested = true;
                         }
                     }
                 }
@@ -567,6 +629,19 @@ impl ViewportPanel {
                 }
 
                 if let Some(preview) = selection_move_preview {
+                    Self::draw_wall_overwrite_preview(
+                        &painter,
+                        map,
+                        preview.map,
+                        preview.top_left,
+                        &preview.layers,
+                        preview.ignore_overwrite_region,
+                        origin,
+                        half_w,
+                        half_h,
+                        wall_atlas,
+                        wall_texture,
+                    );
                     Self::draw_selection_move_preview(
                         &painter,
                         preview.map,
@@ -589,6 +664,19 @@ impl ViewportPanel {
                         .or(selection_context_tile)
                         .or(paste_preview_anchor),
                 ) {
+                    Self::draw_wall_overwrite_preview(
+                        &painter,
+                        map,
+                        preview.map,
+                        (col, row),
+                        &preview.layers,
+                        preview.ignore_overwrite_region,
+                        origin,
+                        half_w,
+                        half_h,
+                        wall_atlas,
+                        wall_texture,
+                    );
                     Self::draw_selection_move_preview(
                         &painter,
                         preview.map,
@@ -615,14 +703,22 @@ impl ViewportPanel {
                         &colors,
                     );
                 } else if active_tool == Tool::Select {
-                    if let Some(selection) = selection_preview.or(current_selection) {
-                        Self::draw_tile_selection(
-                            &painter, selection, origin, half_w, half_h, &colors,
-                        );
-                    } else if let Some((col, row)) = result.hover_tile {
-                        Self::draw_tile_highlight(
-                            &painter, col, row, origin, half_w, half_h, &colors,
-                        );
+                    if under_wall_selection.is_none() {
+                        if let Some(selection) = selection_preview.or(current_selection) {
+                            Self::draw_tile_selection(
+                                &painter,
+                                selection,
+                                origin,
+                                half_w,
+                                half_h,
+                                &colors,
+                                selection_pulse,
+                            );
+                        } else if let Some((col, row)) = result.hover_tile {
+                            Self::draw_tile_highlight(
+                                &painter, col, row, origin, half_w, half_h, &colors,
+                            );
+                        }
                     }
                 } else if let Some((col, row)) = result.hover_tile {
                     if active_tool == Tool::Stamp {
@@ -647,8 +743,8 @@ impl ViewportPanel {
                         );
                     }
                 }
-
-                if !paste_preview_active
+                if interaction_enabled
+                    && !paste_preview_active
                     && (active_tool == Tool::Select || selection_clipboard_available)
                     && response.secondary_clicked()
                 {
@@ -673,7 +769,8 @@ impl ViewportPanel {
                 let can_create_prefab = current_selection
                     .map(|selection| Self::selection_contains_tiles(map, selection))
                     .unwrap_or(false);
-                let show_selection_context_menu = !paste_preview_active
+                let show_selection_context_menu = interaction_enabled
+                    && !paste_preview_active
                     && selection_context_tile.is_some()
                     && (active_tool == Tool::Select || selection_clipboard_available);
                 if show_selection_context_menu {
@@ -816,6 +913,8 @@ impl ViewportPanel {
         half_h: f32,
         viewport: egui::Rect,
         layers: &LayerVisibility,
+        wall_outline_selection: Option<TileSelection>,
+        selection_pulse: f32,
     ) {
         let tw = half_w * 2.0;
         let th = half_h * 2.0;
@@ -824,6 +923,8 @@ impl ViewportPanel {
         let width = map.width as u32;
         let height = map.height as u32;
         let max_depth = width + height;
+        let mut wall_outline_sprites: Vec<WallOutlineSprite> = Vec::new();
+        let mut wall_meshes: Vec<egui::Mesh> = Vec::new();
 
         for depth in 0..max_depth {
             // All (col, row) pairs with col + row == depth, within map bounds.
@@ -843,6 +944,9 @@ impl ViewportPanel {
             for row in row_min..=row_max {
                 let col = depth - row;
                 let tile = &map.tiles[row as usize * width as usize + col as usize];
+                let outline_walls = wall_outline_selection
+                    .map(|selection| selection.contains((col as u16, row as u16)))
+                    .unwrap_or(false);
 
                 let cx = origin.x + (col as f32 - row as f32) * half_w;
                 let cy = origin.y + (col as f32 + row as f32) * half_h;
@@ -887,6 +991,14 @@ impl ViewportPanel {
                                         egui::pos2(u1, v1),
                                     );
                                     mesh.add_rect_with_uv(sprite_rect, uv, egui::Color32::WHITE);
+                                    if outline_walls {
+                                        if let Some(source_rect) = atlas.sprite_rect(idx) {
+                                            wall_outline_sprites.push(WallOutlineSprite {
+                                                source_rect,
+                                                screen_rect: sprite_rect,
+                                            });
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -911,6 +1023,14 @@ impl ViewportPanel {
                                         egui::pos2(u1, v1),
                                     );
                                     mesh.add_rect_with_uv(sprite_rect, uv, egui::Color32::WHITE);
+                                    if outline_walls {
+                                        if let Some(source_rect) = atlas.sprite_rect(idx) {
+                                            wall_outline_sprites.push(WallOutlineSprite {
+                                                source_rect,
+                                                screen_rect: sprite_rect,
+                                            });
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -926,9 +1046,26 @@ impl ViewportPanel {
             }
             if let Some(mesh) = wall_mesh {
                 if !mesh.is_empty() {
-                    painter.add(egui::Shape::mesh(mesh));
+                    wall_meshes.push(mesh);
                 }
             }
+        }
+        if let Some(selection) = wall_outline_selection {
+            Self::draw_tile_selection(
+                painter,
+                selection,
+                origin,
+                half_w,
+                half_h,
+                &theme_colors(),
+                selection_pulse,
+            );
+        }
+        for mesh in wall_meshes {
+            painter.add(egui::Shape::mesh(mesh));
+        }
+        if let Some(atlas) = wall_atlas {
+            Self::draw_merged_sprite_silhouette_outline(painter, atlas, &wall_outline_sprites);
         }
     }
 
@@ -1446,10 +1583,12 @@ impl ViewportPanel {
         half_w: f32,
         half_h: f32,
         colors: &ThemeColors,
+        pulse_opacity: f32,
     ) {
         let (min_col, min_row, max_col, max_row) = selection.normalized_bounds();
-        let fill = colors.accent.gamma_multiply(0.14);
-        let stroke = egui::Stroke::new(1.5, colors.accent);
+        let fill = colors.accent.gamma_multiply(0.08 + 0.08 * pulse_opacity);
+        let stroke =
+            egui::Stroke::new(1.5, colors.accent.gamma_multiply(0.7 + 0.3 * pulse_opacity));
 
         for row in min_row..=max_row {
             for col in min_col..=max_col {
@@ -1712,6 +1851,182 @@ impl ViewportPanel {
             i32::from(origin_tile.0) + i32::from(bounds.max_col) - i32::from(anchor.0),
             i32::from(origin_tile.1) + i32::from(bounds.max_row) - i32::from(anchor.1),
         ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn under_wall_selection(
+        viewport_hovered: bool,
+        map: &map::Map,
+        active_tool: Tool,
+        paste_preview_active: bool,
+        current_selection: Option<TileSelection>,
+        selection_move_active: bool,
+        selection_drag_active: bool,
+        selection_drag_start_tile: Option<(u16, u16)>,
+        pointer_interact_pos: Option<egui::Pos2>,
+        rect: egui::Rect,
+        overlay_rect: egui::Rect,
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+    ) -> Option<TileSelection> {
+        if active_tool != Tool::Select || paste_preview_active {
+            return None;
+        }
+        if let Some(selection) = current_selection {
+            return Some(selection);
+        }
+
+        let pointer_pos = if selection_drag_active {
+            pointer_interact_pos.map(|pos| Self::clamp_point_to_rect(pos, rect.shrink(1.0)))
+        } else if viewport_hovered {
+            pointer_interact_pos
+        } else {
+            None
+        }?;
+
+        if !selection_drag_active && overlay_rect.contains(pointer_pos) {
+            return None;
+        }
+
+        let hover_tile = if selection_drag_active {
+            Self::screen_to_tile_clamped(pointer_pos, origin, half_w, half_h, map)
+        } else {
+            Self::screen_to_tile(pointer_pos, origin, half_w, half_h, map)
+        }?;
+
+        if selection_drag_active && !selection_move_active {
+            if let Some(start) = selection_drag_start_tile {
+                return Some(TileSelection::from_points(start, hover_tile));
+            }
+        }
+
+        Some(TileSelection::from_points(hover_tile, hover_tile))
+    }
+
+    fn selection_pulse_opacity(ctx: &egui::Context) -> f32 {
+        let time = ctx.input(|i| i.time) as f32;
+        0.55 + 0.45 * ((time * 2.0).sin() * 0.5 + 0.5)
+    }
+
+    fn draw_merged_sprite_silhouette_outline(
+        painter: &egui::Painter,
+        atlas: &render::SpriteAtlas,
+        sprites: &[WallOutlineSprite],
+    ) {
+        if sprites.is_empty() {
+            return;
+        }
+        let (atlas_width, atlas_height) = atlas.dimensions();
+        if atlas_width == 0 || atlas_height == 0 {
+            return;
+        }
+        let pixels = atlas.pixels();
+        let min_x = sprites
+            .iter()
+            .map(|sprite| sprite.screen_rect.left().floor() as i32)
+            .min()
+            .unwrap_or(0);
+        let min_y = sprites
+            .iter()
+            .map(|sprite| sprite.screen_rect.top().floor() as i32)
+            .min()
+            .unwrap_or(0);
+        let max_x = sprites
+            .iter()
+            .map(|sprite| sprite.screen_rect.right().ceil() as i32)
+            .max()
+            .unwrap_or(min_x);
+        let max_y = sprites
+            .iter()
+            .map(|sprite| sprite.screen_rect.bottom().ceil() as i32)
+            .max()
+            .unwrap_or(min_y);
+        let mask_width = (max_x - min_x).max(1) as usize;
+        let mask_height = (max_y - min_y).max(1) as usize;
+        if mask_width.saturating_mul(mask_height) > 4_000_000 {
+            return;
+        }
+        let mut mask = vec![false; mask_width * mask_height];
+        let stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 220));
+
+        let alpha_at = |src_x: u32, src_y: u32, src_w: u32, src_h: u32, px: i32, py: i32| -> u8 {
+            if px < 0 || py < 0 || px >= src_w as i32 || py >= src_h as i32 {
+                return 0;
+            }
+            let atlas_px = src_x + px as u32;
+            let atlas_py = src_y + py as u32;
+            if atlas_px >= atlas_width || atlas_py >= atlas_height {
+                return 0;
+            }
+            let idx = ((atlas_py * atlas_width + atlas_px) * 4 + 3) as usize;
+            pixels.get(idx).copied().unwrap_or(0)
+        };
+
+        for sprite in sprites {
+            let (src_x, src_y, src_w, src_h) = sprite.source_rect;
+            if src_w == 0 || src_h == 0 {
+                continue;
+            }
+            let scale_x = sprite.screen_rect.width() / src_w as f32;
+            let scale_y = sprite.screen_rect.height() / src_h as f32;
+            for py in 0..src_h as i32 {
+                for px in 0..src_w as i32 {
+                    if alpha_at(src_x, src_y, src_w, src_h, px, py) == 0 {
+                        continue;
+                    }
+
+                    let x0 = (sprite.screen_rect.left() + px as f32 * scale_x).floor() as i32 - min_x;
+                    let x1 =
+                        (sprite.screen_rect.left() + (px + 1) as f32 * scale_x).ceil() as i32 - min_x;
+                    let y0 = (sprite.screen_rect.top() + py as f32 * scale_y).floor() as i32 - min_y;
+                    let y1 =
+                        (sprite.screen_rect.top() + (py + 1) as f32 * scale_y).ceil() as i32 - min_y;
+
+                    let x0 = x0.clamp(0, mask_width as i32);
+                    let x1 = x1.clamp(0, mask_width as i32);
+                    let y0 = y0.clamp(0, mask_height as i32);
+                    let y1 = y1.clamp(0, mask_height as i32);
+                    for sy in y0..y1 {
+                        for sx in x0..x1 {
+                            mask[sy as usize * mask_width + sx as usize] = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        let mask_at = |x: i32, y: i32| -> bool {
+            if x < 0 || y < 0 || x >= mask_width as i32 || y >= mask_height as i32 {
+                return false;
+            }
+            mask[y as usize * mask_width + x as usize]
+        };
+
+        for y in 0..mask_height as i32 {
+            for x in 0..mask_width as i32 {
+                if !mask_at(x, y) {
+                    continue;
+                }
+                let x0 = (min_x + x) as f32;
+                let x1 = x0 + 1.0;
+                let y0 = (min_y + y) as f32;
+                let y1 = y0 + 1.0;
+                if !mask_at(x, y - 1) {
+                    painter.line_segment([egui::pos2(x0, y0), egui::pos2(x1, y0)], stroke);
+                }
+                if !mask_at(x + 1, y) {
+                    painter.line_segment([egui::pos2(x1, y0), egui::pos2(x1, y1)], stroke);
+                }
+                if !mask_at(x, y + 1) {
+                    painter.line_segment([egui::pos2(x0, y1), egui::pos2(x1, y1)], stroke);
+                }
+                if !mask_at(x - 1, y) {
+                    painter.line_segment([egui::pos2(x0, y0), egui::pos2(x0, y1)], stroke);
+                }
+            }
+        }
     }
 
     fn tile_diamond_points(
@@ -2044,6 +2359,57 @@ impl ViewportPanel {
         }
     }
 
+    fn draw_prefab_wall_overwrite_preview(
+        painter: &egui::Painter,
+        map: &map::Map,
+        prefab: &map::Map,
+        origin_tile: (u16, u16),
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+        wall_atlas: Option<&render::SpriteAtlas>,
+        wall_texture: Option<&egui::TextureHandle>,
+    ) {
+        let anchor = prefab::placement_anchor(prefab);
+
+        for prefab_row in 0..prefab.height {
+            for prefab_col in 0..prefab.width {
+                let idx = prefab_row as usize * prefab.width as usize + prefab_col as usize;
+                let source_tile = prefab.tiles[idx];
+                let dst_col =
+                    i32::from(origin_tile.0) + i32::from(prefab_col) - i32::from(anchor.0);
+                let dst_row =
+                    i32::from(origin_tile.1) + i32::from(prefab_row) - i32::from(anchor.1);
+                if dst_col < 0
+                    || dst_row < 0
+                    || dst_col >= i32::from(map.width)
+                    || dst_row >= i32::from(map.height)
+                {
+                    continue;
+                }
+
+                let (dst_col, dst_row) = (dst_col as u16, dst_row as u16);
+                let dst_idx = dst_row as usize * map.width as usize + dst_col as usize;
+                let target_tile = map.tiles[dst_idx];
+                let overwrite = Self::overwritten_wall_sides(source_tile, target_tile);
+                if overwrite.left_wall || overwrite.right_wall {
+                    Self::draw_wall_overwrite_warning(
+                        painter,
+                        dst_col,
+                        dst_row,
+                        target_tile,
+                        overwrite,
+                        origin,
+                        half_w,
+                        half_h,
+                        wall_atlas,
+                        wall_texture,
+                    );
+                }
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn draw_selection_move_preview(
         painter: &egui::Painter,
@@ -2117,6 +2483,203 @@ impl ViewportPanel {
                     );
                 }
             }
+        }
+    }
+
+    fn draw_wall_overwrite_preview(
+        painter: &egui::Painter,
+        map: &map::Map,
+        source: &map::Map,
+        top_left: (u16, u16),
+        layers: &LayerVisibility,
+        ignore_region: Option<TileSelection>,
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+        wall_atlas: Option<&render::SpriteAtlas>,
+        wall_texture: Option<&egui::TextureHandle>,
+    ) {
+        for src_row in 0..source.height {
+            for src_col in 0..source.width {
+                let dst_col = u32::from(top_left.0) + u32::from(src_col);
+                let dst_row = u32::from(top_left.1) + u32::from(src_row);
+                if dst_col >= u32::from(map.width) || dst_row >= u32::from(map.height) {
+                    continue;
+                }
+                if ignore_region
+                    .map(|selection| selection.contains((dst_col as u16, dst_row as u16)))
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+
+                let src_idx = src_row as usize * source.width as usize + src_col as usize;
+                let dst_idx = dst_row as usize * map.width as usize + dst_col as usize;
+                let mut source_tile = source.tiles[src_idx];
+                if !layers.left_wall {
+                    source_tile.left_wall = 0;
+                }
+                if !layers.right_wall {
+                    source_tile.right_wall = 0;
+                }
+                let target_tile = map.tiles[dst_idx];
+                let overwrite = Self::overwritten_wall_sides(source_tile, target_tile);
+                if overwrite.left_wall || overwrite.right_wall {
+                    Self::draw_wall_overwrite_warning(
+                        painter,
+                        dst_col as u16,
+                        dst_row as u16,
+                        target_tile,
+                        overwrite,
+                        origin,
+                        half_w,
+                        half_h,
+                        wall_atlas,
+                        wall_texture,
+                    );
+                }
+            }
+        }
+    }
+
+    fn overwritten_wall_sides(source_tile: map::Tile, target_tile: map::Tile) -> LayerVisibility {
+        LayerVisibility {
+            ground: false,
+            left_wall: is_rendered_wall(source_tile.left_wall)
+                && is_rendered_wall(target_tile.left_wall),
+            right_wall: is_rendered_wall(source_tile.right_wall)
+                && is_rendered_wall(target_tile.right_wall),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_wall_overwrite_warning(
+        painter: &egui::Painter,
+        col: u16,
+        row: u16,
+        target_tile: map::Tile,
+        overwrite: LayerVisibility,
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+        wall_atlas: Option<&render::SpriteAtlas>,
+        wall_texture: Option<&egui::TextureHandle>,
+    ) {
+        Self::draw_wall_overwrite_tile(painter, col, row, origin, half_w, half_h);
+        if overwrite.left_wall {
+            Self::draw_wall_overwrite_sprite_outline(
+                painter,
+                col,
+                row,
+                origin,
+                half_w,
+                half_h,
+                wall_atlas,
+                wall_texture,
+                target_tile.left_wall,
+                true,
+            );
+        }
+        if overwrite.right_wall {
+            Self::draw_wall_overwrite_sprite_outline(
+                painter,
+                col,
+                row,
+                origin,
+                half_w,
+                half_h,
+                wall_atlas,
+                wall_texture,
+                target_tile.right_wall,
+                false,
+            );
+        }
+    }
+
+    fn draw_wall_overwrite_tile(
+        painter: &egui::Painter,
+        col: u16,
+        row: u16,
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+    ) {
+        let (top, right, bottom, left) =
+            Self::tile_diamond_points(i32::from(col), i32::from(row), origin, half_w, half_h);
+        painter.add(egui::Shape::convex_polygon(
+            vec![top, right, bottom, left],
+            egui::Color32::from_rgba_unmultiplied(192, 32, 24, 84),
+            egui::Stroke::NONE,
+        ));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_wall_overwrite_sprite_outline(
+        painter: &egui::Painter,
+        col: u16,
+        row: u16,
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+        wall_atlas: Option<&render::SpriteAtlas>,
+        wall_texture: Option<&egui::TextureHandle>,
+        wall_id: u16,
+        is_left_wall: bool,
+    ) {
+        let (atlas, texture) = match (wall_atlas, wall_texture) {
+            (Some(a), Some(t)) => (a, t),
+            _ => return,
+        };
+        if !is_rendered_wall(wall_id) {
+            return;
+        }
+        let idx = wall_id as u32;
+        let sprite_h = atlas.sprite_height(idx);
+        if sprite_h == 0 {
+            return;
+        }
+        let (u0, v0, u1, v1) = match atlas.sprite_uv(idx) {
+            Some(uv) => uv,
+            None => return,
+        };
+
+        let zoom = half_w / (map::TILE_WIDTH / 2.0);
+        let screen_h = sprite_h as f32 * zoom;
+        let cx = origin.x + (col as f32 - row as f32) * half_w;
+        let cy = origin.y + (col as f32 + row as f32) * half_h;
+        let bottom_y = cy + 2.0 * half_h;
+        let sprite_rect = if is_left_wall {
+            egui::Rect::from_min_max(
+                egui::pos2(cx - half_w, bottom_y - screen_h),
+                egui::pos2(cx, bottom_y),
+            )
+        } else {
+            egui::Rect::from_min_max(
+                egui::pos2(cx, bottom_y - screen_h),
+                egui::pos2(cx + half_w, bottom_y),
+            )
+        };
+        let uv = egui::Rect::from_min_max(egui::pos2(u0, v0), egui::pos2(u1, v1));
+        let outline = (zoom.max(1.0) * 1.2).round();
+        let offsets = [
+            egui::vec2(-outline, 0.0),
+            egui::vec2(outline, 0.0),
+            egui::vec2(0.0, -outline),
+            egui::vec2(0.0, outline),
+            egui::vec2(-outline, -outline),
+            egui::vec2(outline, -outline),
+            egui::vec2(-outline, outline),
+            egui::vec2(outline, outline),
+        ];
+
+        for offset in offsets {
+            let mut mesh = egui::Mesh::with_texture(texture.id());
+            mesh.add_rect_with_uv(
+                sprite_rect.translate(offset),
+                uv,
+                egui::Color32::from_rgba_unmultiplied(220, 48, 32, 96),
+            );
+            painter.add(egui::Shape::mesh(mesh));
         }
     }
 

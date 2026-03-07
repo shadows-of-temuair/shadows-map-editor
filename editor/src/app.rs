@@ -2542,7 +2542,14 @@ impl eframe::App for EditorApp {
             self.selection_drag_mode.as_ref(),
             self.documents[self.active_tab].selection(),
         ) {
-            (Some(SelectionDragMode::Moving { preview_map, .. }), Some(selection)) => {
+            (
+                Some(SelectionDragMode::Moving {
+                    original_selection,
+                    preview_map,
+                    ..
+                }),
+                Some(selection),
+            ) => {
                 let (min_col, min_row, _, _) = selection.normalized_bounds();
                 Some(SelectionMovePreview {
                     map: preview_map,
@@ -2552,6 +2559,7 @@ impl eframe::App for EditorApp {
                     } else {
                         selection_move_layers
                     },
+                    ignore_overwrite_region: Some(*original_selection),
                 })
             }
             _ => None,
@@ -2563,10 +2571,17 @@ impl eframe::App for EditorApp {
                     map: &clipboard.map,
                     top_left: (0, 0),
                     layers: clipboard.layers,
+                    ignore_overwrite_region: None,
                 })
         } else {
             None
         };
+        let modal_open = self.new_map_size_dialog.is_open()
+            || self.asset_setup_dialog.is_open()
+            || self.prefab_create_dialog.is_open()
+            || self.prefab_delete_dialog.is_open()
+            || self.export_dialog.is_open()
+            || self.unsaved_changes_dialog.is_open();
         let vp_result = {
             let doc = &mut self.documents[self.active_tab];
             let current_selection = doc.selection();
@@ -2574,6 +2589,7 @@ impl eframe::App for EditorApp {
                 ctx,
                 &doc.map,
                 &mut doc.camera,
+                !modal_open,
                 effective_tool,
                 self.active_shape_kind,
                 self.active_paint_layer,
@@ -2660,6 +2676,9 @@ impl eframe::App for EditorApp {
                     }
                 }
             }
+        }
+        if vp_result.clear_selection_requested {
+            self.documents[self.active_tab].set_selection(None);
         }
         if vp_result.cut_selection_requested {
             let _ = self.cut_active_selection_to_clipboard(selection_action_layers);

@@ -242,8 +242,14 @@ impl InspectorPanel {
         } else {
             Self::section_header(ui, colors, "Tile Palette", Some(TILE_PALETTE_SECTION_ICON));
             ui.add_space(8.0);
+            let top_height = Self::top_section_max_height(ui, tab_map_open);
+            let (top_rect, _) = ui.allocate_exact_size(
+                egui::vec2(ui.available_width(), top_height),
+                egui::Sense::hover(),
+            );
+            let mut top_ui = ui.new_child(egui::UiBuilder::new().max_rect(top_rect));
             Self::draw_tile_palette(
-                ui,
+                &mut top_ui,
                 colors,
                 tile_atlas,
                 atlas_texture,
