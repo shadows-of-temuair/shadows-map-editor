@@ -130,27 +130,23 @@ impl EditorApp {
         &self,
         layers: LayerVisibility,
     ) -> Option<TileSelection> {
-        self.documents[self.active_tab]
-            .selection()
-            .or_else(|| {
-                let tile = self.hover_tile;
-                Self::tile_has_selection_layers(&self.documents[self.active_tab].map, tile, layers)
-                    .then_some(TileSelection::from_points(tile, tile))
-            })
+        self.documents[self.active_tab].selection().or_else(|| {
+            let tile = self.hover_tile;
+            Self::tile_has_selection_layers(&self.documents[self.active_tab].map, tile, layers)
+                .then_some(TileSelection::from_points(tile, tile))
+        })
     }
 
     pub(super) fn effective_selection_for_any_occupied_tile(&self) -> Option<TileSelection> {
-        self.documents[self.active_tab]
-            .selection()
-            .or_else(|| {
-                let tile = self.hover_tile;
-                Self::tile_has_selection_layers(
-                    &self.documents[self.active_tab].map,
-                    tile,
-                    LayerVisibility::default(),
-                )
-                .then_some(TileSelection::from_points(tile, tile))
-            })
+        self.documents[self.active_tab].selection().or_else(|| {
+            let tile = self.hover_tile;
+            Self::tile_has_selection_layers(
+                &self.documents[self.active_tab].map,
+                tile,
+                LayerVisibility::default(),
+            )
+            .then_some(TileSelection::from_points(tile, tile))
+        })
     }
 
     pub(super) fn selection_action_layers(&self, shift_held: bool) -> LayerVisibility {

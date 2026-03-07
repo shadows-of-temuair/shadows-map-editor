@@ -1,5 +1,5 @@
-use std::{cmp::Reverse, io};
 use std::path::Path;
+use std::{cmp::Reverse, io};
 
 pub const TILE_WIDTH: f32 = 56.0;
 pub const TILE_HEIGHT: f32 = 27.0;

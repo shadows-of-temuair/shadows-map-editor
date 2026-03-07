@@ -20,6 +20,7 @@ pub enum StatusBarAction {
     ZoomIn,
     ZoomOut,
     SetDimensions(u16, u16),
+    TrimCanvas,
 }
 
 #[derive(Default)]
@@ -329,6 +330,24 @@ impl StatusBarPanel {
                                 if custom_btn.clicked() {
                                     self.size_dialog.open(map.width, map.height);
                                     egui::Popup::close_id(ui.ctx(), popup_id);
+                                }
+
+                                if document_kind == DocumentKind::Prefab {
+                                    let trim_btn = ui.add(
+                                        egui::Button::new(
+                                            egui::RichText::new("Trim Canvas")
+                                                .size(13.0)
+                                                .color(colors.text),
+                                        )
+                                        .fill(egui::Color32::TRANSPARENT)
+                                        .stroke(egui::Stroke::NONE)
+                                        .min_size(egui::vec2(ui.available_width(), 24.0))
+                                        .corner_radius(4.0),
+                                    );
+                                    if trim_btn.clicked() {
+                                        action = StatusBarAction::TrimCanvas;
+                                        egui::Popup::close_id(ui.ctx(), popup_id);
+                                    }
                                 }
                             });
 

@@ -13,7 +13,9 @@ use tracing::{info, warn};
 mod selection;
 
 use self::selection::{SelectionClipboard, SelectionDragMode};
-use crate::document::{DocumentKind, LayerVisibility, MapDocument, PaintLayer, TileSelection};
+use crate::document::{
+    DocumentKind, LayerVisibility, MapDocument, PaintLayer, TileSelection, TrimCanvasResult,
+};
 use crate::map_list::{MapList, MapMetadataHint};
 use crate::palette_lookup::LoadedPaletteLookup;
 use crate::panels::{
@@ -58,6 +60,7 @@ struct LoadedAssets {
     wall_atlas: Option<render::SpriteAtlas>,
     sotp_data: Option<Vec<u8>>,
     ground_animation_table: Option<GroundAnimationTable>,
+    wall_animation_table: Option<GroundAnimationTable>,
 }
 
 enum AssetImportProgressEvent {
@@ -125,6 +128,7 @@ pub struct EditorApp {
     tab_overlay_texture: Option<egui::TextureHandle>,
     sotp_data: Option<Vec<u8>>,
     ground_animation_table: Option<GroundAnimationTable>,
+    wall_animation_table: Option<GroundAnimationTable>,
     map_list: Option<MapList>,
     prefab_assets: Vec<PrefabAsset>,
     selected_prefab: Option<usize>,
@@ -190,6 +194,7 @@ impl EditorApp {
             wall_atlas: None,
             sotp_data: None,
             ground_animation_table: None,
+            wall_animation_table: None,
             map_list,
             prefab_assets,
             selected_prefab,
@@ -455,6 +460,26 @@ impl EditorApp {
                     None
                 }
             };
+        let wall_animation_table = match Self::get_pool_asset_case_insensitive(&pool, "stcani.tbl")
+        {
+            Some(data) => match GroundAnimationTable::from_tbl_bytes(data) {
+                Ok(table) => {
+                    info!(
+                        "Loaded stcani.tbl ({} animated wall sequences)",
+                        table.entry_count()
+                    );
+                    Some(table)
+                }
+                Err(error) => {
+                    warn!("Failed to parse stcani.tbl: {}", error);
+                    None
+                }
+            },
+            None => {
+                info!("stcani.tbl not found in asset archives");
+                None
+            }
+        };
 
         progress(
             "Loading assets: tile and wall atlases (3/5)".to_string(),
@@ -535,6 +560,7 @@ impl EditorApp {
             wall_atlas,
             sotp_data,
             ground_animation_table,
+            wall_animation_table,
         })
     }
 
@@ -644,6 +670,7 @@ impl EditorApp {
         self.wall_atlas = assets.wall_atlas;
         self.sotp_data = assets.sotp_data;
         self.ground_animation_table = assets.ground_animation_table;
+        self.wall_animation_table = assets.wall_animation_table;
         self.atlas_texture = None;
         self.wall_texture = None;
 
@@ -2035,8 +2062,14 @@ impl EditorApp {
         ) = ctx.input(|i| {
             let cmd = i.modifiers.command;
             let shift = i.modifiers.shift;
-            let cut_event = i.events.iter().any(|event| matches!(event, egui::Event::Cut));
-            let copy_event = i.events.iter().any(|event| matches!(event, egui::Event::Copy));
+            let cut_event = i
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::Cut));
+            let copy_event = i
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::Copy));
             let paste_event = i
                 .events
                 .iter()
@@ -2116,11 +2149,12 @@ impl EditorApp {
             let save_as = cmd && shift && i.key_pressed(egui::Key::S);
             let undo = cmd && !shift && i.key_pressed(egui::Key::Z);
             let redo = cmd && shift && i.key_pressed(egui::Key::Z);
-            let cut = !keyboard_captured && (cut_event || (cmd && !shift && i.key_pressed(egui::Key::X)));
-            let copy =
-                !keyboard_captured && (copy_event || (cmd && !shift && i.key_pressed(egui::Key::C)));
-            let paste =
-                !keyboard_captured && (paste_event || (cmd && !shift && i.key_pressed(egui::Key::V)));
+            let cut =
+                !keyboard_captured && (cut_event || (cmd && !shift && i.key_pressed(egui::Key::X)));
+            let copy = !keyboard_captured
+                && (copy_event || (cmd && !shift && i.key_pressed(egui::Key::C)));
+            let paste = !keyboard_captured
+                && (paste_event || (cmd && !shift && i.key_pressed(egui::Key::V)));
 
             (
                 cmd && !shift && i.key_pressed(egui::Key::N),
@@ -2312,11 +2346,18 @@ impl eframe::App for EditorApp {
         self.poll_asset_import_progress(ctx);
         self.poll_asset_load_progress(ctx);
 
-        if let Some(interval_ms) = self
+        let animation_interval_ms = self
             .ground_animation_table
             .as_ref()
             .and_then(|table| table.minimum_interval_ms())
-        {
+            .into_iter()
+            .chain(
+                self.wall_animation_table
+                    .as_ref()
+                    .and_then(|table| table.minimum_interval_ms()),
+            )
+            .min();
+        if let Some(interval_ms) = animation_interval_ms {
             ctx.request_repaint_after(Duration::from_millis(u64::from(interval_ms.max(16))));
         }
 
@@ -2420,6 +2461,22 @@ impl eframe::App for EditorApp {
                     };
                 }
             }
+            StatusBarAction::TrimCanvas => match self.documents[self.active_tab]
+                .trim_canvas_to_content()
+            {
+                Ok(TrimCanvasResult::Trimmed { width, height }) => {
+                    self.status_message = format!("Trimmed prefab canvas to {}x{}", width, height);
+                }
+                Ok(TrimCanvasResult::Unchanged) => {
+                    self.status_message = "Prefab canvas is already trimmed.".to_string();
+                }
+                Ok(TrimCanvasResult::Empty) => {
+                    self.status_message = "Prefab is empty.".to_string();
+                }
+                Err(err) => {
+                    self.status_message = err;
+                }
+            },
             StatusBarAction::None => {}
         }
 
@@ -2554,8 +2611,10 @@ impl eframe::App for EditorApp {
                 &doc.map,
                 self.sotp_data.as_deref(),
                 self.tile_atlas.as_ref(),
+                self.ground_animation_table.as_ref(),
                 self.atlas_texture.as_ref(),
                 self.wall_atlas.as_ref(),
+                self.wall_animation_table.as_ref(),
                 self.wall_texture.as_ref(),
                 &mut requested,
                 &mut self.selected_ground_tile,
@@ -2670,6 +2729,7 @@ impl eframe::App for EditorApp {
                 stamp_prefab.as_ref(),
                 self.tile_atlas.as_ref(),
                 self.ground_animation_table.as_ref(),
+                self.wall_animation_table.as_ref(),
                 self.atlas_texture.as_ref(),
                 self.wall_atlas.as_ref(),
                 self.wall_texture.as_ref(),

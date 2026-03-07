@@ -7,7 +7,7 @@ use crate::{
     map_list::MapMetadataHint,
     prefab::{
         PrefabFile, centered_canvas_offset, load_prefab_asset, placement_anchor,
-        sanitize_prefab_name,
+        sanitize_prefab_name, trimmed_map,
     },
 };
 
@@ -202,6 +202,13 @@ impl LayerVisibility {
 pub struct StampResult {
     pub changed_tiles: usize,
     pub clipped_tiles: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrimCanvasResult {
+    Empty,
+    Unchanged,
+    Trimmed { width: u16, height: u16 },
 }
 
 pub struct MapDocument {
@@ -425,6 +432,28 @@ impl MapDocument {
         self.undo_stack.clear();
         self.redo_stack.clear();
         Ok(())
+    }
+
+    pub fn trim_canvas_to_content(&mut self) -> Result<TrimCanvasResult, String> {
+        self.finish_stroke();
+
+        let Some(trimmed) = trimmed_map(&self.map, true) else {
+            return Ok(TrimCanvasResult::Empty);
+        };
+
+        if trimmed.width == self.map.width && trimmed.height == self.map.height {
+            return Ok(TrimCanvasResult::Unchanged);
+        }
+
+        let width = trimmed.width;
+        let height = trimmed.height;
+        self.map = trimmed;
+        self.camera = Camera::default();
+        self.selection = None;
+        self.dirty = true;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        Ok(TrimCanvasResult::Trimmed { width, height })
     }
 
     pub fn selection(&self) -> Option<TileSelection> {
@@ -1133,6 +1162,40 @@ mod tests {
         assert_eq!(doc.map.tiles[3].left_wall, 3);
         assert!(doc.map.tiles.iter().all(|tile| tile.right_wall != 4));
         assert!(doc.map.tiles.iter().all(|tile| tile.ground != 1));
+    }
+
+    #[test]
+    fn trim_canvas_to_content_removes_empty_border_without_losing_tiles() {
+        let mut doc = MapDocument::new_prefab(5, 5);
+        doc.map.tiles[1 * 5 + 2].ground = 7;
+        doc.map.tiles[2 * 5 + 3].left_wall = 11;
+        doc.map.tiles[3 * 5 + 4].right_wall = 13;
+
+        let result = doc.trim_canvas_to_content().unwrap();
+
+        assert_eq!(
+            result,
+            TrimCanvasResult::Trimmed {
+                width: 3,
+                height: 3
+            }
+        );
+        assert_eq!(doc.map.width, 3);
+        assert_eq!(doc.map.height, 3);
+        assert_eq!(doc.map.tiles[0].ground, 7);
+        assert_eq!(doc.map.tiles[1 * 3 + 1].left_wall, 11);
+        assert_eq!(doc.map.tiles[2 * 3 + 2].right_wall, 13);
+    }
+
+    #[test]
+    fn trim_canvas_to_content_reports_empty_prefab_without_resizing() {
+        let mut doc = MapDocument::new_prefab(6, 6);
+
+        let result = doc.trim_canvas_to_content().unwrap();
+
+        assert_eq!(result, TrimCanvasResult::Empty);
+        assert_eq!(doc.map.width, 6);
+        assert_eq!(doc.map.height, 6);
     }
 
     #[test]

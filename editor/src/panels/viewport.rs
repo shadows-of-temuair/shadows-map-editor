@@ -41,9 +41,26 @@ fn animated_ground_tile_id(
     tile_id: u16,
     animation_time_seconds: f64,
 ) -> u16 {
+    let Some(raw_tile_id) = tile_id.checked_sub(1) else {
+        return tile_id;
+    };
     ground_animation_table
-        .map(|table| table.animated_tile_id(tile_id, animation_time_seconds))
+        .map(|table| {
+            table
+                .animated_tile_id(raw_tile_id, animation_time_seconds)
+                .saturating_add(1)
+        })
         .unwrap_or(tile_id)
+}
+
+fn animated_wall_tile_id(
+    wall_animation_table: Option<&GroundAnimationTable>,
+    wall_id: u16,
+    animation_time_seconds: f64,
+) -> u16 {
+    wall_animation_table
+        .map(|table| table.animated_tile_id(wall_id, animation_time_seconds))
+        .unwrap_or(wall_id)
 }
 
 #[derive(Default)]
@@ -116,6 +133,7 @@ impl ViewportPanel {
         stamp_prefab: Option<&map::Map>,
         tile_atlas: Option<&render::TileAtlas>,
         ground_animation_table: Option<&GroundAnimationTable>,
+        wall_animation_table: Option<&GroundAnimationTable>,
         atlas_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
@@ -143,8 +161,9 @@ impl ViewportPanel {
             .show(ctx, |ui| {
                 let rect = ui.max_rect();
                 let viewport_center_id = ui.id().with("viewport_center");
-                if let Some(previous_center) =
-                    ui.ctx().data(|data| data.get_temp::<egui::Pos2>(viewport_center_id))
+                if let Some(previous_center) = ui
+                    .ctx()
+                    .data(|data| data.get_temp::<egui::Pos2>(viewport_center_id))
                 {
                     camera.offset += rect.center() - previous_center;
                 }
@@ -260,11 +279,7 @@ impl ViewportPanel {
                     press_origin.and_then(|press_pos| {
                         current_selection.and_then(|selection| {
                             Self::selected_tile_at_screen_pos(
-                                selection,
-                                press_pos,
-                                origin,
-                                half_w,
-                                half_h,
+                                selection, press_pos, origin, half_w, half_h,
                             )
                         })
                     })
@@ -272,8 +287,9 @@ impl ViewportPanel {
                     None
                 };
                 let pressed_map_tile = if selection_press_started {
-                    press_origin
-                        .and_then(|press_pos| Self::screen_to_tile(press_pos, origin, half_w, half_h, map))
+                    press_origin.and_then(|press_pos| {
+                        Self::screen_to_tile(press_pos, origin, half_w, half_h, map)
+                    })
                 } else {
                     None
                 };
@@ -318,6 +334,7 @@ impl ViewportPanel {
                     map,
                     tile_atlas,
                     ground_animation_table,
+                    wall_animation_table,
                     atlas_texture,
                     wall_atlas,
                     wall_texture,
@@ -448,6 +465,7 @@ impl ViewportPanel {
                                             selected_paint_tile,
                                             tile_atlas,
                                             ground_animation_table,
+                                            wall_animation_table,
                                             atlas_texture,
                                             wall_atlas,
                                             wall_texture,
@@ -485,6 +503,7 @@ impl ViewportPanel {
                                                 selected_paint_tile,
                                                 tile_atlas,
                                                 ground_animation_table,
+                                                wall_animation_table,
                                                 atlas_texture,
                                                 wall_atlas,
                                                 wall_texture,
@@ -502,6 +521,7 @@ impl ViewportPanel {
                                                 selected_paint_tile,
                                                 tile_atlas,
                                                 ground_animation_table,
+                                                wall_animation_table,
                                                 atlas_texture,
                                                 wall_atlas,
                                                 wall_texture,
@@ -529,6 +549,7 @@ impl ViewportPanel {
                                                 selected_paint_tile,
                                                 tile_atlas,
                                                 ground_animation_table,
+                                                wall_animation_table,
                                                 atlas_texture,
                                                 wall_atlas,
                                                 wall_texture,
@@ -546,6 +567,7 @@ impl ViewportPanel {
                                                 selected_paint_tile,
                                                 tile_atlas,
                                                 ground_animation_table,
+                                                wall_animation_table,
                                                 atlas_texture,
                                                 wall_atlas,
                                                 wall_texture,
@@ -570,6 +592,7 @@ impl ViewportPanel {
                                             selected_paint_tile,
                                             tile_atlas,
                                             ground_animation_table,
+                                            wall_animation_table,
                                             atlas_texture,
                                             wall_atlas,
                                             wall_texture,
@@ -604,6 +627,7 @@ impl ViewportPanel {
                                                 half_h,
                                                 tile_atlas,
                                                 ground_animation_table,
+                                                wall_animation_table,
                                                 atlas_texture,
                                                 wall_atlas,
                                                 wall_texture,
@@ -651,10 +675,12 @@ impl ViewportPanel {
                                                     half_w,
                                                     half_h,
                                                     wall_atlas,
+                                                    wall_animation_table,
                                                     wall_texture,
                                                     wall_id,
                                                     true,
                                                     180,
+                                                    animation_time_seconds,
                                                 );
                                                 Self::draw_wall_silhouette_outline_for_tile(
                                                     &painter,
@@ -664,8 +690,10 @@ impl ViewportPanel {
                                                     half_w,
                                                     half_h,
                                                     wall_atlas,
+                                                    wall_animation_table,
                                                     wall_id,
                                                     true,
+                                                    animation_time_seconds,
                                                 );
                                             }
                                             EyedropperPick::RightWall(wall_id) if wall_id != 0 => {
@@ -677,10 +705,12 @@ impl ViewportPanel {
                                                     half_w,
                                                     half_h,
                                                     wall_atlas,
+                                                    wall_animation_table,
                                                     wall_texture,
                                                     wall_id,
                                                     false,
                                                     180,
+                                                    animation_time_seconds,
                                                 );
                                                 Self::draw_wall_silhouette_outline_for_tile(
                                                     &painter,
@@ -690,8 +720,10 @@ impl ViewportPanel {
                                                     half_w,
                                                     half_h,
                                                     wall_atlas,
+                                                    wall_animation_table,
                                                     wall_id,
                                                     false,
+                                                    animation_time_seconds,
                                                 );
                                             }
                                             _ => {}
@@ -767,6 +799,7 @@ impl ViewportPanel {
                         half_h,
                         tile_atlas,
                         ground_animation_table,
+                        wall_animation_table,
                         atlas_texture,
                         wall_atlas,
                         wall_texture,
@@ -804,6 +837,7 @@ impl ViewportPanel {
                         half_h,
                         tile_atlas,
                         ground_animation_table,
+                        wall_animation_table,
                         atlas_texture,
                         wall_atlas,
                         wall_texture,
@@ -914,7 +948,7 @@ impl ViewportPanel {
                                 None,
                                 true,
                             )
-                                .clicked()
+                            .clicked()
                             {
                                 result.cut_selection_requested = true;
                                 ui.ctx().data_mut(|data| {
@@ -930,7 +964,7 @@ impl ViewportPanel {
                                 None,
                                 true,
                             )
-                                .clicked()
+                            .clicked()
                             {
                                 result.copy_selection_requested = true;
                                 ui.ctx().data_mut(|data| {
@@ -963,7 +997,7 @@ impl ViewportPanel {
                                 None,
                                 can_create_prefab,
                             )
-                                .clicked()
+                            .clicked()
                             {
                                 result.create_prefab_requested = true;
                                 ui.ctx().data_mut(|data| {
@@ -1029,6 +1063,7 @@ impl ViewportPanel {
         map: &map::Map,
         tile_atlas: Option<&render::TileAtlas>,
         ground_animation_table: Option<&GroundAnimationTable>,
+        wall_animation_table: Option<&GroundAnimationTable>,
         tile_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
@@ -1106,7 +1141,12 @@ impl ViewportPanel {
                 // --- Left wall ---
                 if layers.left_wall && is_rendered_wall(tile.left_wall) {
                     if let (Some(atlas), Some(mesh)) = (wall_atlas, wall_mesh.as_mut()) {
-                        let idx = tile.left_wall as u32;
+                        let animated_wall_id = animated_wall_tile_id(
+                            wall_animation_table,
+                            tile.left_wall,
+                            animation_time_seconds,
+                        );
+                        let idx = animated_wall_id as u32;
                         let sh = atlas.sprite_height(idx);
                         if sh > 0 {
                             let screen_h = sh as f32 * zoom;
@@ -1138,7 +1178,12 @@ impl ViewportPanel {
                 // --- Right wall ---
                 if layers.right_wall && is_rendered_wall(tile.right_wall) {
                     if let (Some(atlas), Some(mesh)) = (wall_atlas, wall_mesh.as_mut()) {
-                        let idx = tile.right_wall as u32;
+                        let animated_wall_id = animated_wall_tile_id(
+                            wall_animation_table,
+                            tile.right_wall,
+                            animation_time_seconds,
+                        );
+                        let idx = animated_wall_id as u32;
                         let sh = atlas.sprite_height(idx);
                         if sh > 0 {
                             let screen_h = sh as f32 * zoom;
@@ -1914,11 +1959,8 @@ impl ViewportPanel {
         );
 
         if response.hovered() {
-            ui.painter().rect_filled(
-                rect,
-                2.0,
-                ui.style().visuals.widgets.hovered.bg_fill,
-            );
+            ui.painter()
+                .rect_filled(rect, 2.0, ui.style().visuals.widgets.hovered.bg_fill);
         }
 
         let icon_x = rect.left() + MENU_LEFT_PADDING;
@@ -2129,15 +2171,26 @@ impl ViewportPanel {
         half_w: f32,
         half_h: f32,
         wall_atlas: Option<&render::SpriteAtlas>,
+        wall_animation_table: Option<&GroundAnimationTable>,
         wall_id: u16,
         is_left_wall: bool,
+        animation_time_seconds: f64,
     ) {
         let Some(atlas) = wall_atlas else {
             return;
         };
-        let Some(sprite) =
-            Self::wall_outline_sprite_for_tile(col, row, origin, half_w, half_h, atlas, wall_id, is_left_wall)
-        else {
+        let animated_wall_id =
+            animated_wall_tile_id(wall_animation_table, wall_id, animation_time_seconds);
+        let Some(sprite) = Self::wall_outline_sprite_for_tile(
+            col,
+            row,
+            origin,
+            half_w,
+            half_h,
+            atlas,
+            animated_wall_id,
+            is_left_wall,
+        ) else {
             return;
         };
         Self::draw_merged_sprite_silhouette_outline(painter, atlas, &[sprite]);
@@ -2182,8 +2235,10 @@ impl ViewportPanel {
             return;
         }
         let mut mask = vec![false; mask_width * mask_height];
-        let stroke =
-            egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 220));
+        let stroke = egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 220),
+        );
 
         let alpha_at = |src_x: u32, src_y: u32, src_w: u32, src_h: u32, px: i32, py: i32| -> u8 {
             if px < 0 || py < 0 || px >= src_w as i32 || py >= src_h as i32 {
@@ -2211,12 +2266,14 @@ impl ViewportPanel {
                         continue;
                     }
 
-                    let x0 = (sprite.screen_rect.left() + px as f32 * scale_x).floor() as i32 - min_x;
-                    let x1 =
-                        (sprite.screen_rect.left() + (px + 1) as f32 * scale_x).ceil() as i32 - min_x;
-                    let y0 = (sprite.screen_rect.top() + py as f32 * scale_y).floor() as i32 - min_y;
-                    let y1 =
-                        (sprite.screen_rect.top() + (py + 1) as f32 * scale_y).ceil() as i32 - min_y;
+                    let x0 =
+                        (sprite.screen_rect.left() + px as f32 * scale_x).floor() as i32 - min_x;
+                    let x1 = (sprite.screen_rect.left() + (px + 1) as f32 * scale_x).ceil() as i32
+                        - min_x;
+                    let y0 =
+                        (sprite.screen_rect.top() + py as f32 * scale_y).floor() as i32 - min_y;
+                    let y1 = (sprite.screen_rect.top() + (py + 1) as f32 * scale_y).ceil() as i32
+                        - min_y;
 
                     let x0 = x0.clamp(0, mask_width as i32);
                     let x1 = x1.clamp(0, mask_width as i32);
@@ -2329,6 +2386,7 @@ impl ViewportPanel {
         paint_value: u16,
         tile_atlas: Option<&render::TileAtlas>,
         ground_animation_table: Option<&GroundAnimationTable>,
+        wall_animation_table: Option<&GroundAnimationTable>,
         tile_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
@@ -2345,6 +2403,7 @@ impl ViewportPanel {
             paint_value,
             tile_atlas,
             ground_animation_table,
+            wall_animation_table,
             tile_texture,
             wall_atlas,
             wall_texture,
@@ -2365,6 +2424,7 @@ impl ViewportPanel {
         paint_value: u16,
         tile_atlas: Option<&render::TileAtlas>,
         ground_animation_table: Option<&GroundAnimationTable>,
+        wall_animation_table: Option<&GroundAnimationTable>,
         tile_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
@@ -2394,10 +2454,12 @@ impl ViewportPanel {
                 half_w,
                 half_h,
                 wall_atlas,
+                wall_animation_table,
                 wall_texture,
                 paint_value,
                 true,
                 alpha,
+                animation_time_seconds,
             ),
             PaintLayer::RightWall => Self::draw_wall_preview(
                 painter,
@@ -2407,10 +2469,12 @@ impl ViewportPanel {
                 half_w,
                 half_h,
                 wall_atlas,
+                wall_animation_table,
                 wall_texture,
                 paint_value,
                 false,
                 alpha,
+                animation_time_seconds,
             ),
         }
     }
@@ -2472,10 +2536,12 @@ impl ViewportPanel {
         half_w: f32,
         half_h: f32,
         wall_atlas: Option<&render::SpriteAtlas>,
+        wall_animation_table: Option<&GroundAnimationTable>,
         wall_texture: Option<&egui::TextureHandle>,
         wall_id: u16,
         is_left_wall: bool,
         alpha: u8,
+        animation_time_seconds: f64,
     ) {
         let (atlas, texture) = match (wall_atlas, wall_texture) {
             (Some(a), Some(t)) => (a, t),
@@ -2484,7 +2550,9 @@ impl ViewportPanel {
         if wall_id == 0 {
             return;
         }
-        let idx = wall_id as u32;
+        let animated_wall_id =
+            animated_wall_tile_id(wall_animation_table, wall_id, animation_time_seconds);
+        let idx = animated_wall_id as u32;
         let sprite_h = atlas.sprite_height(idx);
         if sprite_h == 0 {
             return;
@@ -2531,6 +2599,7 @@ impl ViewportPanel {
         half_h: f32,
         tile_atlas: Option<&render::TileAtlas>,
         ground_animation_table: Option<&GroundAnimationTable>,
+        wall_animation_table: Option<&GroundAnimationTable>,
         tile_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
@@ -2567,6 +2636,7 @@ impl ViewportPanel {
                         tile.ground,
                         tile_atlas,
                         ground_animation_table,
+                        wall_animation_table,
                         tile_texture,
                         wall_atlas,
                         wall_texture,
@@ -2586,6 +2656,7 @@ impl ViewportPanel {
                         tile.left_wall,
                         tile_atlas,
                         ground_animation_table,
+                        wall_animation_table,
                         tile_texture,
                         wall_atlas,
                         wall_texture,
@@ -2605,6 +2676,7 @@ impl ViewportPanel {
                         tile.right_wall,
                         tile_atlas,
                         ground_animation_table,
+                        wall_animation_table,
                         tile_texture,
                         wall_atlas,
                         wall_texture,
@@ -2678,6 +2750,7 @@ impl ViewportPanel {
         half_h: f32,
         tile_atlas: Option<&render::TileAtlas>,
         ground_animation_table: Option<&GroundAnimationTable>,
+        wall_animation_table: Option<&GroundAnimationTable>,
         tile_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
@@ -2702,6 +2775,7 @@ impl ViewportPanel {
                         tile.ground,
                         tile_atlas,
                         ground_animation_table,
+                        wall_animation_table,
                         tile_texture,
                         wall_atlas,
                         wall_texture,
@@ -2721,6 +2795,7 @@ impl ViewportPanel {
                         tile.left_wall,
                         tile_atlas,
                         ground_animation_table,
+                        wall_animation_table,
                         tile_texture,
                         wall_atlas,
                         wall_texture,
@@ -2740,6 +2815,7 @@ impl ViewportPanel {
                         tile.right_wall,
                         tile_atlas,
                         ground_animation_table,
+                        wall_animation_table,
                         tile_texture,
                         wall_atlas,
                         wall_texture,
@@ -2985,6 +3061,7 @@ impl ViewportPanel {
         paint_value: u16,
         tile_atlas: Option<&render::TileAtlas>,
         ground_animation_table: Option<&GroundAnimationTable>,
+        wall_animation_table: Option<&GroundAnimationTable>,
         tile_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
@@ -3010,6 +3087,7 @@ impl ViewportPanel {
                 paint_value,
                 tile_atlas,
                 ground_animation_table,
+                wall_animation_table,
                 tile_texture,
                 wall_atlas,
                 wall_texture,
@@ -3018,10 +3096,7 @@ impl ViewportPanel {
         }
     }
 
-    fn eyedropper_target(
-        tile: &map::Tile,
-        paint_layer: PaintLayer,
-    ) -> EyedropperPick {
+    fn eyedropper_target(tile: &map::Tile, paint_layer: PaintLayer) -> EyedropperPick {
         match paint_layer {
             PaintLayer::Ground => EyedropperPick::Ground(tile.ground),
             PaintLayer::LeftWall => EyedropperPick::LeftWall(tile.left_wall),
@@ -3094,6 +3169,7 @@ impl ViewportPanel {
         paint_value: u16,
         tile_atlas: Option<&render::TileAtlas>,
         ground_animation_table: Option<&GroundAnimationTable>,
+        wall_animation_table: Option<&GroundAnimationTable>,
         tile_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
@@ -3121,6 +3197,7 @@ impl ViewportPanel {
                     paint_value,
                     tile_atlas,
                     ground_animation_table,
+                    wall_animation_table,
                     tile_texture,
                     wall_atlas,
                     wall_texture,
