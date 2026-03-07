@@ -34,7 +34,8 @@ const PREFAB_PREVIEW_TOP_PAD: f32 = 4.0;
 const PREFAB_PREVIEW_BOTTOM_PAD: f32 = 44.0;
 const PREFAB_SECTION_ICON: &str = "\u{E5D8}";
 const TILE_PALETTE_SECTION_ICON: &str = "\u{E2A1}";
-const PREFAB_EDIT_ICON: &str = "\u{1F4DD}";
+const PREFAB_EDIT_ICON: &str = "\u{270E}";
+const PREFAB_SEARCH_ICON: &str = "\u{1F50D}";
 
 #[derive(Default)]
 pub struct InspectorResponse {
@@ -297,21 +298,53 @@ impl InspectorPanel {
                         let edit_enabled = selected_prefab_index
                             .map(|index| index < prefabs.len())
                             .unwrap_or(false);
-                        let edit_response = ui.add_enabled_ui(edit_enabled, |ui| {
-                            ui.add_sized(
-                                egui::vec2(24.0, 18.0),
-                                egui::Button::new(
-                                    egui::RichText::new(PREFAB_EDIT_ICON)
-                                        .font(icons::symbol_icon_font_id(13.0))
-                                        .color(colors.text),
-                                )
-                                .fill(egui::Color32::TRANSPARENT)
-                                .stroke(egui::Stroke::new(1.0, colors.border))
-                                .corner_radius(0.0),
-                            )
-                        });
-                        let _ = tooltip::attach(edit_response.response, "Edit Prefab");
-                        if edit_response.inner.clicked() {
+                        let sense = if edit_enabled {
+                            egui::Sense::click()
+                        } else {
+                            egui::Sense::hover()
+                        };
+                        let (edit_rect, edit_response) =
+                            ui.allocate_exact_size(egui::vec2(28.0, 24.0), sense);
+                        let edit_fill = if !edit_enabled {
+                            egui::Color32::TRANSPARENT
+                        } else if edit_response.hovered() {
+                            colors.panel_2
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        let edit_stroke = if edit_enabled && edit_response.hovered() {
+                            egui::Stroke::new(1.0, colors.accent)
+                        } else {
+                            egui::Stroke::new(1.0, colors.border)
+                        };
+                        let edit_icon_color = if !edit_enabled {
+                            colors.muted
+                        } else if edit_response.hovered() {
+                            colors.text
+                        } else {
+                            colors.text.gamma_multiply(0.92)
+                        };
+                        ui.painter().rect(
+                            edit_rect,
+                            0.0,
+                            edit_fill,
+                            edit_stroke,
+                            egui::StrokeKind::Inside,
+                        );
+                        ui.painter().text(
+                            edit_rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            PREFAB_EDIT_ICON,
+                            icons::symbol_icon_font_id(12.0),
+                            edit_icon_color,
+                        );
+                        if edit_enabled && edit_response.hovered() {
+                            ui.output_mut(|output| {
+                                output.cursor_icon = egui::CursorIcon::PointingHand
+                            });
+                        }
+                        let _ = tooltip::attach(edit_response.clone(), "Edit Prefab");
+                        if edit_response.clicked() {
                             response.edit_prefab_index =
                                 selected_prefab_index.filter(|index| *index < prefabs.len());
                         }
@@ -1547,11 +1580,34 @@ impl InspectorPanel {
             }
         });
         ui.add_space(8.0);
-        ui.add(
-            egui::TextEdit::singleline(prefab_search)
-                .hint_text("Search prefabs...")
-                .desired_width(f32::INFINITY),
-        );
+        egui::Frame::NONE
+            .fill(colors.bg_2)
+            .stroke(egui::Stroke::new(1.0, colors.border))
+            .corner_radius(4.0)
+            .inner_margin(egui::Margin::symmetric(8, 4))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    let (icon_rect, _) =
+                        ui.allocate_exact_size(egui::vec2(20.0, 24.0), egui::Sense::hover());
+                    ui.painter().text(
+                        icon_rect.center() + egui::vec2(0.0, 3.0),
+                        egui::Align2::CENTER_CENTER,
+                        PREFAB_SEARCH_ICON,
+                        icons::symbol_icon_font_id(16.0),
+                        colors.muted,
+                    );
+                    ui.add(
+                        egui::TextEdit::singleline(prefab_search)
+                            .hint_text(
+                                egui::RichText::new("Search prefabs...").color(colors.muted),
+                            )
+                            .desired_width(f32::INFINITY)
+                            .margin(egui::Margin::symmetric(8, 6))
+                            .frame(false),
+                    );
+                });
+            });
         ui.add_space(8.0);
 
         let search = prefab_search.trim().to_lowercase();
@@ -1583,7 +1639,7 @@ impl InspectorPanel {
                         ui,
                         colors,
                         body_height,
-                        "No prefabs match the current search.",
+                        "No prefabs found",
                     );
                     return;
                 }

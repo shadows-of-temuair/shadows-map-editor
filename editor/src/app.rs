@@ -313,6 +313,9 @@ impl EditorApp {
 
     fn set_active_tool(&mut self, tool: Tool) {
         if self.active_tool != tool {
+            if self.active_tool == Tool::Select && tool != Tool::Select {
+                let _ = self.clear_active_selection();
+            }
             self.active_tool = tool;
             self.selection_drag_start_tile = None;
             self.selection_drag_mode = None;
