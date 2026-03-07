@@ -37,6 +37,7 @@ const PREFAB_EDIT_ICON: &str = "\u{1F4DD}";
 
 #[derive(Default)]
 pub struct InspectorResponse {
+    pub panel_resize_active: bool,
     pub new_prefab_requested: bool,
     pub import_prefab_requested: bool,
     pub select_prefab_index: Option<usize>,
@@ -157,6 +158,11 @@ impl InspectorPanel {
                 );
             });
 
+        response.panel_resize_active = ctx
+            .read_response(egui::Id::new("inspector").with("__resize"))
+            .map(|response| response.dragged())
+            .unwrap_or(false);
+
         response
     }
 
@@ -185,6 +191,7 @@ impl InspectorPanel {
         response: &mut InspectorResponse,
     ) {
         let prefab_mode = active_tool == Tool::Stamp;
+        let tab_map_available = sotp.is_some();
         let bottom_section_id = ui.make_persistent_id(egui::Id::new(TAB_MAP_COLLAPSE_ID));
         let mut bottom_section_state =
             egui::collapsing_header::CollapsingState::load_with_default_open(
@@ -192,7 +199,7 @@ impl InspectorPanel {
                 bottom_section_id,
                 true,
             );
-        let tab_map_open = bottom_section_state.is_open();
+        let tab_map_open = tab_map_available && bottom_section_state.is_open();
         let tab_map_border_pad = if tab_map_open {
             TAB_MAP_BORDER_PAD_OPEN
         } else {
@@ -242,14 +249,8 @@ impl InspectorPanel {
         } else {
             Self::section_header(ui, colors, "Tile Palette", Some(TILE_PALETTE_SECTION_ICON));
             ui.add_space(8.0);
-            let top_height = Self::top_section_max_height(ui, tab_map_open);
-            let (top_rect, _) = ui.allocate_exact_size(
-                egui::vec2(ui.available_width(), top_height),
-                egui::Sense::hover(),
-            );
-            let mut top_ui = ui.new_child(egui::UiBuilder::new().max_rect(top_rect));
             Self::draw_tile_palette(
-                &mut top_ui,
+                ui,
                 colors,
                 tile_atlas,
                 atlas_texture,
@@ -260,7 +261,7 @@ impl InspectorPanel {
                 selected_wall_tile,
                 reveal_ground_tile,
                 reveal_wall_tile,
-                tab_map_open,
+                tab_map_available && tab_map_open,
             );
         }
 
@@ -327,7 +328,7 @@ impl InspectorPanel {
                 prefabs,
                 selected_prefab_index,
             );
-        } else {
+        } else if tab_map_available {
             Self::full_width_border(ui, colors, panel_rect, tab_map_border_pad);
 
             ui.allocate_ui_with_layout(
@@ -739,11 +740,7 @@ impl InspectorPanel {
         let (atlas, texture) = match (wall_atlas, wall_texture) {
             (Some(a), Some(t)) => (a, t),
             _ => {
-                ui.label(
-                    egui::RichText::new("Wall atlas unavailable")
-                        .size(13.0)
-                        .color(colors.muted),
-                );
+                Self::draw_palette_empty(ui, colors, max_palette_height, "Wall atlas unavailable");
                 return;
             }
         };
@@ -752,11 +749,7 @@ impl InspectorPanel {
             .filter(|&id| atlas.sprite_rect(id).is_some())
             .collect::<Vec<_>>();
         if wall_ids.is_empty() {
-            ui.label(
-                egui::RichText::new("No wall sprites loaded")
-                    .size(13.0)
-                    .color(colors.muted),
-            );
+            Self::draw_palette_empty(ui, colors, max_palette_height, "No wall sprites loaded");
             return;
         }
 
@@ -813,6 +806,26 @@ impl InspectorPanel {
         if consumed_reveal {
             *reveal_wall_tile = None;
         }
+    }
+
+    fn draw_palette_empty(
+        ui: &mut egui::Ui,
+        colors: &ThemeColors,
+        max_palette_height: f32,
+        text: &str,
+    ) {
+        let height = max_palette_height.max(TILE_SHEET_MIN_HEIGHT);
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), height),
+            egui::Layout::top_down(egui::Align::LEFT),
+            |ui| {
+                ui.label(
+                    egui::RichText::new(text)
+                        .size(13.0)
+                        .color(colors.muted),
+                );
+            },
+        );
     }
 
     fn ground_picker_cell(

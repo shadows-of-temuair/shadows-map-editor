@@ -2053,8 +2053,7 @@ impl EditorApp {
             };
 
             // Collision overlay toggle (Tab)
-            let toggle_tab_overlay =
-                !keyboard_captured && !cmd && !shift && i.key_pressed(egui::Key::Tab);
+            let toggle_tab_overlay = !cmd && !shift && i.key_pressed(egui::Key::Tab);
 
             // Keyboard zoom (Cmd+/-, snap to 25%; Cmd+0 reset)
             let keyboard_zoom: Option<i8> = if cmd && !shift {
@@ -2146,9 +2145,14 @@ impl EditorApp {
                 _ => {}
             }
         }
-        let tab_shortcut_blocked = self.export_dialog.is_open()
+        let tab_shortcut_blocked = self.asset_setup_dialog.is_open()
+            || self.export_dialog.is_open()
             || self.new_map_size_dialog.is_open()
-            || self.status_bar.is_size_dialog_open();
+            || self.prefab_create_dialog.is_open()
+            || self.prefab_delete_dialog.is_open()
+            || self.unsaved_changes_dialog.is_open()
+            || self.status_bar.is_size_dialog_open()
+            || self.renaming_prefab_index().is_some();
         if toggle_tab_overlay && !tab_shortcut_blocked {
             if self.sotp_data.is_some() {
                 self.show_collision_overlay = !self.show_collision_overlay;
@@ -2517,6 +2521,7 @@ impl eframe::App for EditorApp {
         if requested_layer != self.active_paint_layer {
             self.set_active_paint_layer(requested_layer);
         }
+        let inspector_panel_resize_active = inspector_response.panel_resize_active;
         self.handle_inspector_response(inspector_response);
 
         // Viewport needs mutable access to camera for panning
@@ -2589,7 +2594,7 @@ impl eframe::App for EditorApp {
                 ctx,
                 &doc.map,
                 &mut doc.camera,
-                !modal_open,
+                !modal_open && !inspector_panel_resize_active,
                 effective_tool,
                 self.active_shape_kind,
                 self.active_paint_layer,
@@ -2732,6 +2737,9 @@ impl eframe::App for EditorApp {
                     self.status_message =
                         format!("Picked wall #{} (right).", self.selected_wall_tile);
                 }
+            }
+            if alt_held && self.active_tool == Tool::Select {
+                self.set_active_tool(Tool::Pencil);
             }
         }
 

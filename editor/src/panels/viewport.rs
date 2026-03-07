@@ -129,6 +129,15 @@ impl ViewportPanel {
             )
             .show(ctx, |ui| {
                 let rect = ui.max_rect();
+                let viewport_center_id = ui.id().with("viewport_center");
+                if let Some(previous_center) =
+                    ui.ctx().data(|data| data.get_temp::<egui::Pos2>(viewport_center_id))
+                {
+                    camera.offset += rect.center() - previous_center;
+                }
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(viewport_center_id, rect.center());
+                });
                 let response = ui.interact(
                     rect,
                     ui.id().with("viewport"),
@@ -168,12 +177,14 @@ impl ViewportPanel {
                 }
 
                 let overlay_rect = Self::overlay_rect(rect);
+                let viewport_primary_down = response.is_pointer_button_down_on()
+                    && ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
                 let primary_pressed = interaction_enabled
                     && !context_menu_open
+                    && response.contains_pointer()
                     && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
-                let primary_down = interaction_enabled
-                    && !context_menu_open
-                    && ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
+                let primary_down =
+                    interaction_enabled && !context_menu_open && viewport_primary_down;
                 let pointer_interact_pos = ui.input(|i| i.pointer.interact_pos());
                 let selection_press_valid = active_tool == Tool::Select
                     && !paste_preview_active
@@ -193,11 +204,13 @@ impl ViewportPanel {
                     && selection_drag_start_tile.is_some()
                 {
                     if let Some(pointer_pos) = pointer_interact_pos {
-                        let dt = ui.input(|i| i.predicted_dt.max(1.0 / 120.0));
-                        let auto_pan = Self::selection_auto_pan_delta(rect, pointer_pos, dt);
-                        if auto_pan != egui::Vec2::ZERO {
-                            camera.offset += auto_pan;
-                            ctx.request_repaint();
+                        if rect.contains(pointer_pos) {
+                            let dt = ui.input(|i| i.predicted_dt.max(1.0 / 120.0));
+                            let auto_pan = Self::selection_auto_pan_delta(rect, pointer_pos, dt);
+                            if auto_pan != egui::Vec2::ZERO {
+                                camera.offset += auto_pan;
+                                ctx.request_repaint();
+                            }
                         }
                     }
                 }
@@ -526,9 +539,7 @@ impl ViewportPanel {
                                         cursor_icon = Some(egui::CursorIcon::Crosshair);
                                         let idx = row as usize * map.width as usize + col as usize;
                                         let tile = &map.tiles[idx];
-                                        let shift_held = ui.input(|i| i.modifiers.shift);
-                                        let pick =
-                                            Self::eyedropper_target(tile, paint_layer, shift_held);
+                                        let pick = Self::eyedropper_target(tile, paint_layer);
 
                                         Self::draw_eyedropper_target_highlight(
                                             &painter, col, row, origin, half_w, half_h, &pick,
@@ -563,6 +574,17 @@ impl ViewportPanel {
                                                     true,
                                                     180,
                                                 );
+                                                Self::draw_wall_silhouette_outline_for_tile(
+                                                    &painter,
+                                                    col,
+                                                    row,
+                                                    origin,
+                                                    half_w,
+                                                    half_h,
+                                                    wall_atlas,
+                                                    wall_id,
+                                                    true,
+                                                );
                                             }
                                             EyedropperPick::RightWall(wall_id) if wall_id != 0 => {
                                                 Self::draw_wall_preview(
@@ -577,6 +599,17 @@ impl ViewportPanel {
                                                     wall_id,
                                                     false,
                                                     180,
+                                                );
+                                                Self::draw_wall_silhouette_outline_for_tile(
+                                                    &painter,
+                                                    col,
+                                                    row,
+                                                    origin,
+                                                    half_w,
+                                                    half_h,
+                                                    wall_atlas,
+                                                    wall_id,
+                                                    false,
                                                 );
                                             }
                                             _ => {}
@@ -1909,6 +1942,71 @@ impl ViewportPanel {
         0.55 + 0.45 * ((time * 2.0).sin() * 0.5 + 0.5)
     }
 
+    fn wall_outline_sprite_for_tile(
+        col: u16,
+        row: u16,
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+        atlas: &render::SpriteAtlas,
+        wall_id: u16,
+        is_left_wall: bool,
+    ) -> Option<WallOutlineSprite> {
+        if !is_rendered_wall(wall_id) {
+            return None;
+        }
+        let idx = wall_id as u32;
+        let sprite_h = atlas.sprite_height(idx);
+        if sprite_h == 0 {
+            return None;
+        }
+        let source_rect = atlas.sprite_rect(idx)?;
+
+        let zoom = half_w / (map::TILE_WIDTH / 2.0);
+        let screen_h = sprite_h as f32 * zoom;
+        let cx = origin.x + (col as f32 - row as f32) * half_w;
+        let cy = origin.y + (col as f32 + row as f32) * half_h;
+        let bottom_y = cy + 2.0 * half_h;
+        let screen_rect = if is_left_wall {
+            egui::Rect::from_min_max(
+                egui::pos2(cx - half_w, bottom_y - screen_h),
+                egui::pos2(cx, bottom_y),
+            )
+        } else {
+            egui::Rect::from_min_max(
+                egui::pos2(cx, bottom_y - screen_h),
+                egui::pos2(cx + half_w, bottom_y),
+            )
+        };
+
+        Some(WallOutlineSprite {
+            source_rect,
+            screen_rect,
+        })
+    }
+
+    fn draw_wall_silhouette_outline_for_tile(
+        painter: &egui::Painter,
+        col: u16,
+        row: u16,
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+        wall_atlas: Option<&render::SpriteAtlas>,
+        wall_id: u16,
+        is_left_wall: bool,
+    ) {
+        let Some(atlas) = wall_atlas else {
+            return;
+        };
+        let Some(sprite) =
+            Self::wall_outline_sprite_for_tile(col, row, origin, half_w, half_h, atlas, wall_id, is_left_wall)
+        else {
+            return;
+        };
+        Self::draw_merged_sprite_silhouette_outline(painter, atlas, &[sprite]);
+    }
+
     fn draw_merged_sprite_silhouette_outline(
         painter: &egui::Painter,
         atlas: &render::SpriteAtlas,
@@ -2752,17 +2850,11 @@ impl ViewportPanel {
     fn eyedropper_target(
         tile: &map::Tile,
         paint_layer: PaintLayer,
-        shift_held: bool,
     ) -> EyedropperPick {
         match paint_layer {
             PaintLayer::Ground => EyedropperPick::Ground(tile.ground),
-            PaintLayer::LeftWall | PaintLayer::RightWall => {
-                if shift_held {
-                    EyedropperPick::RightWall(tile.right_wall)
-                } else {
-                    EyedropperPick::LeftWall(tile.left_wall)
-                }
-            }
+            PaintLayer::LeftWall => EyedropperPick::LeftWall(tile.left_wall),
+            PaintLayer::RightWall => EyedropperPick::RightWall(tile.right_wall),
         }
     }
 
