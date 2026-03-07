@@ -10,7 +10,7 @@ mod viewport;
 mod window_frame;
 
 pub use export_dialog::{ExportDialog, ExportDialogAction};
-pub use inspector::InspectorPanel;
+pub use inspector::{InspectorPanel, InspectorResponse};
 pub use map_size_dialog::MapSizeDialog;
 pub use status_bar::{StatusBarAction, StatusBarPanel};
 pub use tab_bar::{TabBarAction, TabBarPanel};

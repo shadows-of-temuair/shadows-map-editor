@@ -122,9 +122,7 @@ impl UnsavedChangesDialog {
 
                         let discard_btn = ui.add(
                             egui::Button::new(
-                                egui::RichText::new("Discard")
-                                    .size(14.0)
-                                    .color(colors.text),
+                                egui::RichText::new("Discard").size(14.0).color(colors.text),
                             )
                             .fill(colors.bg_3)
                             .stroke(egui::Stroke::new(1.0, colors.border))

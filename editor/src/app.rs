@@ -1,17 +1,18 @@
-use std::{collections::VecDeque, path::PathBuf};
+use std::{collections::VecDeque, fs, path::Path, path::PathBuf};
 
 use eframe::egui;
 use tracing::{info, warn};
 
-use crate::document::{LayerVisibility, MapDocument, PaintLayer};
+use crate::document::{DocumentKind, LayerVisibility, MapDocument, PaintLayer};
 use crate::map_list::{MapList, MapMetadataHint};
 use crate::palette_lookup::LoadedPaletteLookup;
 use crate::panels::{
-    ExportDialog, ExportDialogAction, EyedropperPick, InspectorPanel, MapSizeDialog,
-    StatusBarAction, StatusBarPanel, TabBarAction, TabBarPanel, TitleBarPanel, Tool,
+    ExportDialog, ExportDialogAction, EyedropperPick, InspectorPanel, InspectorResponse,
+    MapSizeDialog, StatusBarAction, StatusBarPanel, TabBarAction, TabBarPanel, TitleBarPanel, Tool,
     ToolbarAction, ToolbarPanel, UnsavedChangesDialog, UnsavedChangesDialogAction, ViewportPanel,
     WindowFrame,
 };
+use crate::prefab::{self, PrefabAsset};
 use crate::shape::{self, ShapeKind};
 use crate::theme;
 
@@ -44,6 +45,9 @@ pub struct EditorApp {
     tab_overlay_texture: Option<egui::TextureHandle>,
     sotp_data: Option<Vec<u8>>,
     map_list: Option<MapList>,
+    prefab_assets: Vec<PrefabAsset>,
+    selected_prefab: Option<usize>,
+    prefab_search: String,
     hover_tile: (u16, u16),
     selected_tile: Option<(u16, u16)>,
     selected_ground_tile: u16,
@@ -55,8 +59,10 @@ pub struct EditorApp {
     shape_tool_start_tile: Option<(u16, u16)>,
     export_dialog: ExportDialog,
     new_map_size_dialog: MapSizeDialog,
+    pending_new_document_kind: DocumentKind,
     unsaved_changes_dialog: UnsavedChangesDialog,
     pending_unsaved_changes: Option<PendingUnsavedChanges>,
+    allow_window_close: bool,
     status_message: String,
     atlas_needs_upload: bool,
     wall_atlas_needs_upload: bool,
@@ -72,6 +78,8 @@ impl EditorApp {
         // because the renderer hasn't reported the real GPU max texture size yet.
         let (tile_atlas, wall_atlas, sotp_data) = Self::load_assets();
         let map_list = MapList::load_if_exists("maps.ron");
+        let prefab_assets = prefab::load_prefab_assets().unwrap_or_default();
+        let selected_prefab = (!prefab_assets.is_empty()).then_some(0);
         let selected_ground_tile = if tile_atlas.is_some() { 1 } else { 0 };
         let selected_wall_tile = wall_atlas
             .as_ref()
@@ -100,6 +108,9 @@ impl EditorApp {
             wall_atlas,
             sotp_data,
             map_list,
+            prefab_assets,
+            selected_prefab,
+            prefab_search: String::new(),
             atlas_texture: None,
             wall_texture: None,
             tab_overlay_texture: None,
@@ -114,8 +125,10 @@ impl EditorApp {
             shape_tool_start_tile: None,
             export_dialog: ExportDialog::default(),
             new_map_size_dialog: MapSizeDialog::default(),
+            pending_new_document_kind: DocumentKind::Map,
             unsaved_changes_dialog: UnsavedChangesDialog::default(),
             pending_unsaved_changes: None,
+            allow_window_close: false,
             status_message: String::from("Ready"),
             tab_overlay_texture_needs_upload: true,
         }
@@ -131,6 +144,44 @@ impl EditorApp {
         self.map_list
             .as_ref()
             .and_then(|map_list| map_list.hint_for_path(path))
+    }
+
+    fn reload_prefabs(&mut self) {
+        let selected_path = self
+            .selected_prefab
+            .and_then(|index| self.prefab_assets.get(index))
+            .map(|prefab| prefab.path.clone());
+
+        match prefab::load_prefab_assets() {
+            Ok(prefabs) => {
+                self.prefab_assets = prefabs;
+                self.selected_prefab = selected_path
+                    .as_ref()
+                    .and_then(|path| {
+                        self.prefab_assets
+                            .iter()
+                            .position(|prefab| &prefab.path == path)
+                    })
+                    .or_else(|| (!self.prefab_assets.is_empty()).then_some(0));
+            }
+            Err(error) => {
+                warn!("Failed to reload prefabs: {}", error);
+                self.status_message = format!("Prefab reload failed: {}", error);
+            }
+        }
+    }
+
+    fn select_prefab_by_path(&mut self, path: &std::path::Path) {
+        self.selected_prefab = self
+            .prefab_assets
+            .iter()
+            .position(|prefab| prefab.path == path);
+    }
+
+    fn selected_prefab_map(&self) -> Option<&map::Map> {
+        self.selected_prefab
+            .and_then(|index| self.prefab_assets.get(index))
+            .map(|prefab| &prefab.map)
     }
 
     fn set_active_tool(&mut self, tool: Tool) {
@@ -486,10 +537,25 @@ impl EditorApp {
         self.tab_overlay_texture = Some(texture);
     }
 
-    fn new_document(&mut self) {
+    fn open_new_document_dialog(&mut self, kind: DocumentKind) {
         self.documents[self.active_tab].finish_stroke();
-        let map = &self.documents[self.active_tab].map;
-        self.new_map_size_dialog.open(map.width, map.height);
+        self.pending_new_document_kind = kind;
+        let (width, height) = match kind {
+            DocumentKind::Map => {
+                let map = &self.documents[self.active_tab].map;
+                (map.width, map.height)
+            }
+            DocumentKind::Prefab => (6, 6),
+        };
+        self.new_map_size_dialog.open(width, height);
+    }
+
+    fn new_document(&mut self) {
+        self.open_new_document_dialog(DocumentKind::Map);
+    }
+
+    fn new_prefab_document(&mut self) {
+        self.open_new_document_dialog(DocumentKind::Prefab);
     }
 
     fn create_document_with_dimensions(&mut self, width: u16, height: u16) {
@@ -497,49 +563,175 @@ impl EditorApp {
             self.status_message = "Width and height must both be at least 1.".to_string();
             return;
         }
-        self.documents.push(MapDocument::new(width, height));
+        let kind = self.pending_new_document_kind;
+        let document = match kind {
+            DocumentKind::Map => MapDocument::new_map(width, height),
+            DocumentKind::Prefab => MapDocument::new_prefab(width, height),
+        };
+        self.documents.push(document);
         self.active_tab = self.documents.len() - 1;
         self.clear_edit_anchors();
-        self.status_message = format!("Created new map {}x{}", width, height);
+        self.status_message = format!("Created new {} {}x{}", kind.noun(), width, height);
     }
 
     fn open_document(&mut self) {
+        self.open_map_document();
+    }
+
+    fn open_map_document(&mut self) {
         self.documents[self.active_tab].finish_stroke();
         let file = rfd::FileDialog::new()
             .add_filter("Map", &["map"])
             .pick_file();
 
         if let Some(path) = file {
-            // Check if already open — just switch to it
-            for (i, doc) in self.documents.iter().enumerate() {
-                if doc.path.as_ref() == Some(&path) {
-                    self.active_tab = i;
-                    self.clear_edit_anchors();
-                    return;
-                }
-            }
+            self.open_document_from_path(path);
+        }
+    }
 
+    fn open_document_from_path(&mut self, path: PathBuf) {
+        for (i, doc) in self.documents.iter().enumerate() {
+            if doc.path.as_ref() == Some(&path) {
+                self.active_tab = i;
+                self.clear_edit_anchors();
+                if path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext.eq_ignore_ascii_case("ron"))
+                    .unwrap_or(false)
+                {
+                    self.reload_prefabs();
+                    self.select_prefab_by_path(&path);
+                }
+                return;
+            }
+        }
+
+        let ext = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+        let opened = if ext.eq_ignore_ascii_case("map") {
             let hint = self.map_hint_for_path(&path);
-            match MapDocument::open(path.clone(), hint) {
-                Ok(doc) => {
-                    self.documents.push(doc);
-                    self.active_tab = self.documents.len() - 1;
-                    self.clear_edit_anchors();
-                    info!("Opened map: {}", path.display());
+            MapDocument::open_map(path.clone(), hint)
+        } else if ext.eq_ignore_ascii_case("ron") {
+            MapDocument::open_prefab(path.clone())
+        } else {
+            return;
+        };
+
+        match opened {
+            Ok(doc) => {
+                let kind = doc.kind();
+                self.documents.push(doc);
+                self.active_tab = self.documents.len() - 1;
+                self.clear_edit_anchors();
+                if kind == DocumentKind::Prefab {
+                    self.reload_prefabs();
+                    self.select_prefab_by_path(&path);
                 }
-                Err(e) => {
-                    warn!("Failed to open {}: {}", path.display(), e);
-                }
+                info!("Opened {}: {}", kind.noun(), path.display());
+                self.status_message = format!(
+                    "Opened {}.",
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or(kind.noun())
+                );
+            }
+            Err(error) => {
+                warn!("Failed to open {}: {}", path.display(), error);
+                self.status_message = format!("Open failed: {}", error);
             }
         }
     }
 
-    fn save_document_at(&mut self, index: usize) -> bool {
+    fn import_prefab_into_registry(&mut self) {
+        self.documents[self.active_tab].finish_stroke();
+        let file = rfd::FileDialog::new()
+            .add_filter("Prefab", &["ron"])
+            .pick_file();
+
+        let Some(source_path) = file else {
+            return;
+        };
+
+        if let Err(error) = prefab::load_prefab_asset(&source_path) {
+            self.status_message = format!("Import failed: {}", error);
+            return;
+        }
+
+        let prefabs_dir =
+            prefab::ensure_prefabs_dir().unwrap_or_else(|_| PathBuf::from(prefab::PREFABS_DIR));
+        let filename = source_path
+            .file_name()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("imported-prefab.ron"));
+        let destination = prefabs_dir.join(filename);
+
+        let same_file = Self::paths_match(&source_path, &destination);
+        if !same_file {
+            if let Err(error) = fs::copy(&source_path, &destination) {
+                self.status_message = format!("Import failed: {}", error);
+                return;
+            }
+        }
+
+        self.reload_prefabs();
+        self.select_prefab_by_path(&destination);
+        self.status_message = format!(
+            "Imported prefab {}.",
+            destination
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("prefab")
+        );
+    }
+
+    fn paths_match(a: &Path, b: &Path) -> bool {
+        if a == b {
+            return true;
+        }
+
+        match (a.canonicalize(), b.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+    }
+
+    fn handle_inspector_response(&mut self, response: InspectorResponse) {
+        if let Some(index) = response
+            .select_prefab_index
+            .filter(|index| *index < self.prefab_assets.len())
+        {
+            self.selected_prefab = Some(index);
+        }
+        if response.new_prefab_requested {
+            self.new_prefab_document();
+        }
+        if response.import_prefab_requested {
+            self.import_prefab_into_registry();
+        }
+        if let Some(index) = response
+            .edit_prefab_index
+            .filter(|index| *index < self.prefab_assets.len())
+        {
+            if let Some(prefab) = self.prefab_assets.get(index) {
+                self.open_document_from_path(prefab.path.clone());
+            }
+        }
+    }
+
+    fn save_document_at(&mut self, index: usize, prompt_for_path: bool) -> bool {
         let Some(doc) = self.documents.get_mut(index) else {
             return false;
         };
         doc.finish_stroke();
-        let Some(path) = self.prompt_save_path_for_document(index) else {
+        let path = if prompt_for_path {
+            self.prompt_save_path_for_document(index)
+        } else {
+            self.documents[index]
+                .path
+                .clone()
+                .or_else(|| self.prompt_save_path_for_document(index))
+        };
+        let Some(path) = path else {
             return false;
         };
 
@@ -549,10 +741,15 @@ impl EditorApp {
             .unwrap_or("map")
             .to_owned();
 
+        let kind = self.documents[index].kind();
         match self.documents[index].save_as(path.clone()) {
             Ok(()) => {
                 self.documents[index].clear_history();
-                info!("Saved map: {}", path.display());
+                if kind == DocumentKind::Prefab {
+                    self.reload_prefabs();
+                    self.select_prefab_by_path(&path);
+                }
+                info!("Saved {}: {}", kind.noun(), path.display());
                 self.status_message = format!("Saved {}.", filename);
                 true
             }
@@ -565,49 +762,40 @@ impl EditorApp {
     }
 
     fn save_document(&mut self) {
-        let _ = self.save_document_at(self.active_tab);
+        let _ = self.save_document_at(self.active_tab, false);
     }
 
     fn save_document_as(&mut self) {
-        let _ = self.save_document_at(self.active_tab);
+        let _ = self.save_document_at(self.active_tab, true);
     }
 
     fn prompt_save_path_for_document(&self, index: usize) -> Option<PathBuf> {
         let doc = &self.documents[index];
-        let suggested = Self::suggested_map_filename(doc);
+        let suggested = doc.suggested_filename();
 
-        let mut dialog = rfd::FileDialog::new()
-            .add_filter("Map", &["map"])
-            .set_file_name(&suggested);
+        match doc.kind() {
+            DocumentKind::Map => {
+                let mut dialog = rfd::FileDialog::new()
+                    .add_filter("Map", &["map"])
+                    .set_file_name(&suggested);
 
-        if let Some(parent) = doc.path.as_ref().and_then(|p| p.parent()) {
-            dialog = dialog.set_directory(parent);
-        }
-
-        dialog.save_file().map(Self::ensure_map_extension)
-    }
-
-    fn suggested_map_filename(doc: &MapDocument) -> String {
-        let mut name = doc
-            .path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| {
-                let base = doc.display_name();
-                if base.eq_ignore_ascii_case("Untitled") {
-                    String::from("untitled.map")
-                } else {
-                    format!("{base}.map")
+                if let Some(parent) = doc.path.as_ref().and_then(|p| p.parent()) {
+                    dialog = dialog.set_directory(parent);
                 }
-            });
 
-        if !name.to_ascii_lowercase().ends_with(".map") {
-            name.push_str(".map");
+                dialog.save_file().map(Self::ensure_map_extension)
+            }
+            DocumentKind::Prefab => {
+                let directory = prefab::ensure_prefabs_dir()
+                    .unwrap_or_else(|_| PathBuf::from(prefab::PREFABS_DIR));
+                rfd::FileDialog::new()
+                    .add_filter("Prefab", &["ron"])
+                    .set_directory(directory)
+                    .set_file_name(&suggested)
+                    .save_file()
+                    .map(Self::ensure_prefab_save_path)
+            }
         }
-
-        name
     }
 
     fn ensure_map_extension(mut path: PathBuf) -> PathBuf {
@@ -618,6 +806,28 @@ impl EditorApp {
             .unwrap_or(false);
         if !has_map_ext {
             path.set_extension("map");
+        }
+        path
+    }
+
+    fn ensure_prefab_save_path(mut path: PathBuf) -> PathBuf {
+        let prefabs_dir =
+            prefab::ensure_prefabs_dir().unwrap_or_else(|_| PathBuf::from(prefab::PREFABS_DIR));
+        if !path.starts_with(&prefabs_dir) {
+            let file_name = path
+                .file_name()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("untitled-prefab.ron"));
+            path = prefabs_dir.join(file_name);
+        }
+
+        let has_ron_ext = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("ron"))
+            .unwrap_or(false);
+        if !has_ron_ext {
+            path.set_extension("ron");
         }
         path
     }
@@ -653,11 +863,7 @@ impl EditorApp {
         self.clear_edit_anchors();
     }
 
-    fn begin_unsaved_changes_flow(
-        &mut self,
-        action: PendingDiscardAction,
-        document_index: usize,
-    ) {
+    fn begin_unsaved_changes_flow(&mut self, action: PendingDiscardAction, document_index: usize) {
         let Some(doc) = self.documents.get(document_index) else {
             return;
         };
@@ -715,12 +921,13 @@ impl EditorApp {
             UnsavedChangesDialogAction::None => {}
             UnsavedChangesDialogAction::Cancel => {
                 self.pending_unsaved_changes = None;
+                self.allow_window_close = false;
             }
             UnsavedChangesDialogAction::Save => {
                 let Some(pending) = self.pending_unsaved_changes.take() else {
                     return;
                 };
-                if self.save_document_at(pending.document_index) {
+                if self.save_document_at(pending.document_index, false) {
                     self.advance_pending_discard_action(ctx, pending);
                 }
             }
@@ -750,6 +957,7 @@ impl EditorApp {
                         next_index,
                     );
                 } else {
+                    self.allow_window_close = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }
@@ -900,6 +1108,8 @@ impl EditorApp {
     }
 
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
+        let keyboard_captured =
+            ctx.wants_keyboard_input() || ctx.memory(|memory| memory.focused().is_some());
         let (
             new,
             open,
@@ -921,11 +1131,13 @@ impl EditorApp {
             let shift = i.modifiers.shift;
 
             // Tool shortcuts (no modifiers)
-            let tool = if !cmd && !shift {
+            let tool = if !keyboard_captured && !cmd && !shift {
                 if i.key_pressed(egui::Key::V) {
                     Some(Tool::Select)
                 } else if i.key_pressed(egui::Key::B) {
                     Some(Tool::Pencil)
+                } else if i.key_pressed(egui::Key::P) {
+                    Some(Tool::Stamp)
                 } else if i.key_pressed(egui::Key::G) {
                     Some(Tool::Fill)
                 } else if i.key_pressed(egui::Key::L) {
@@ -944,10 +1156,12 @@ impl EditorApp {
             };
 
             // Paint layer toggle (T): ground <-> remembered wall side.
-            let toggle_ground_wall_layer = !cmd && !shift && i.key_pressed(egui::Key::T);
+            let toggle_ground_wall_layer =
+                !keyboard_captured && !cmd && !shift && i.key_pressed(egui::Key::T);
 
             // Wall target toggle (Q): left <-> right when in wall mode.
-            let toggle_wall_target_side = !cmd && !shift && i.key_pressed(egui::Key::Q);
+            let toggle_wall_target_side =
+                !keyboard_captured && !cmd && !shift && i.key_pressed(egui::Key::Q);
 
             // Layer toggle shortcuts (Cmd+1/2/3/4)
             let toggle_layer = if cmd && !shift {
@@ -967,7 +1181,8 @@ impl EditorApp {
             };
 
             // Collision overlay toggle (Tab)
-            let toggle_tab_overlay = !cmd && !shift && i.key_pressed(egui::Key::Tab);
+            let toggle_tab_overlay =
+                !keyboard_captured && !cmd && !shift && i.key_pressed(egui::Key::Tab);
 
             // Keyboard zoom (Cmd+/-, snap to 25%; Cmd+0 reset)
             let keyboard_zoom: Option<i8> = if cmd && !shift {
@@ -988,8 +1203,8 @@ impl EditorApp {
             let redo = cmd && shift && i.key_pressed(egui::Key::Z);
 
             (
-                cmd && i.key_pressed(egui::Key::N),
-                cmd && i.key_pressed(egui::Key::O),
+                cmd && !shift && i.key_pressed(egui::Key::N),
+                cmd && !shift && i.key_pressed(egui::Key::O),
                 save,
                 save_as,
                 cmd && i.key_pressed(egui::Key::W),
@@ -1073,7 +1288,7 @@ impl EditorApp {
             self.new_document();
         }
         if open {
-            self.open_document();
+            self.open_map_document();
         }
         if close {
             self.close_tab(self.active_tab);
@@ -1102,31 +1317,11 @@ impl EditorApp {
         for file in dropped {
             if let Some(path) = file.path {
                 let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                if !ext.eq_ignore_ascii_case("map") {
+                let supported = ext.eq_ignore_ascii_case("map") || ext.eq_ignore_ascii_case("ron");
+                if !supported {
                     continue;
                 }
-                // Check if already open — just switch to it
-                let already_open = self
-                    .documents
-                    .iter()
-                    .position(|doc| doc.path.as_ref() == Some(&path));
-                if let Some(i) = already_open {
-                    self.active_tab = i;
-                    self.clear_edit_anchors();
-                    continue;
-                }
-                let hint = self.map_hint_for_path(&path);
-                match MapDocument::open(path.clone(), hint) {
-                    Ok(doc) => {
-                        self.documents.push(doc);
-                        self.active_tab = self.documents.len() - 1;
-                        self.clear_edit_anchors();
-                        info!("Opened dropped map: {}", path.display());
-                    }
-                    Err(e) => {
-                        warn!("Failed to open dropped file {}: {}", path.display(), e);
-                    }
-                }
+                self.open_document_from_path(path);
             }
         }
     }
@@ -1159,8 +1354,15 @@ impl eframe::App for EditorApp {
         self.try_upload_wall_atlas(ctx);
         self.try_upload_tab_overlay_texture(ctx);
 
-        if ctx.input(|i| i.viewport().close_requested()) {
-            self.request_window_close(ctx);
+        let close_requested = ctx.input(|i| i.viewport().close_requested());
+        if close_requested {
+            if self.allow_window_close {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                self.request_window_close(ctx);
+            }
+        } else {
+            self.allow_window_close = false;
         }
 
         WindowFrame::show(ctx);
@@ -1221,10 +1423,11 @@ impl eframe::App for EditorApp {
                 Self::snap_zoom(&mut self.documents[self.active_tab].camera, -1);
             }
             StatusBarAction::SetDimensions(w, h) => {
+                let kind = self.documents[self.active_tab].kind();
                 if let Err(err) = self.documents[self.active_tab].set_dimensions(w, h) {
                     self.status_message = err;
                 } else {
-                    self.status_message = format!("Resized map to {}x{}", w, h);
+                    self.status_message = format!("Resized {} to {}x{}", kind.noun(), w, h);
                 }
             }
             StatusBarAction::None => {}
@@ -1259,10 +1462,21 @@ impl eframe::App for EditorApp {
             ToolbarAction::None => {}
         }
 
-        if let Some((width, height)) =
-            self.new_map_size_dialog
-                .show(ctx, "new_map_size_dialog", "New Map", "Create", None)
-        {
+        let new_document_title = match self.pending_new_document_kind {
+            DocumentKind::Map => "New Map",
+            DocumentKind::Prefab => "New Prefab",
+        };
+        let create_button = match self.pending_new_document_kind {
+            DocumentKind::Map => "Create",
+            DocumentKind::Prefab => "Create Prefab",
+        };
+        if let Some((width, height)) = self.new_map_size_dialog.show(
+            ctx,
+            "new_map_size_dialog",
+            new_document_title,
+            create_button,
+            None,
+        ) {
             self.create_document_with_dimensions(width, height);
         }
 
@@ -1331,10 +1545,10 @@ impl eframe::App for EditorApp {
         }
 
         // Inspector: tile palette + tab map
-        let requested_layer = {
+        let (requested_layer, inspector_response) = {
             let doc = &self.documents[self.active_tab];
             let mut requested = self.active_paint_layer;
-            InspectorPanel::show(
+            let response = InspectorPanel::show(
                 ctx,
                 &doc.map,
                 self.sotp_data.as_deref(),
@@ -1347,18 +1561,24 @@ impl eframe::App for EditorApp {
                 &mut self.selected_wall_tile,
                 &mut self.reveal_ground_tile_in_palette,
                 &mut self.reveal_wall_tile_in_palette,
+                &self.prefab_assets,
+                self.selected_prefab,
+                &mut self.prefab_search,
+                self.active_tool,
             );
-            requested
+            (requested, response)
         };
         if requested_layer != self.active_paint_layer {
             self.set_active_paint_layer(requested_layer);
         }
+        self.handle_inspector_response(inspector_response);
 
         // Viewport needs mutable access to camera for panning
         if self.sotp_data.is_none() {
             self.show_collision_overlay = false;
         }
 
+        let stamp_prefab = self.selected_prefab_map().cloned();
         let vp_result = {
             let doc = &mut self.documents[self.active_tab];
             ViewportPanel::show(
@@ -1372,6 +1592,7 @@ impl eframe::App for EditorApp {
                 self.selected_wall_tile,
                 self.line_tool_start_tile,
                 self.shape_tool_start_tile,
+                stamp_prefab.as_ref(),
                 self.tile_atlas.as_ref(),
                 self.atlas_texture.as_ref(),
                 self.wall_atlas.as_ref(),
@@ -1473,6 +1694,24 @@ impl eframe::App for EditorApp {
         } else if self.active_tool == Tool::Fill {
             if let Some((col, row, paint_value)) = vp_result.fill_clicked_tile {
                 Self::paint_layer_fill(doc, paint_layer, paint_value, (col, row));
+            }
+        } else if self.active_tool == Tool::Stamp {
+            if let Some(origin) = vp_result.stamp_clicked_tile {
+                if let Some(prefab) = stamp_prefab.as_ref() {
+                    let result = doc.apply_prefab_stamp(origin, prefab);
+                    if result.changed_tiles > 0 {
+                        self.status_message = if result.clipped_tiles > 0 {
+                            format!(
+                                "Placed prefab at {}, {} ({} clipped tiles).",
+                                origin.0, origin.1, result.clipped_tiles
+                            )
+                        } else {
+                            format!("Placed prefab at {}, {}.", origin.0, origin.1)
+                        };
+                    }
+                } else {
+                    self.status_message = "Select a prefab before placing.".to_string();
+                }
             }
         }
         if let Some((col, row, paint_value)) = vp_result.painted_tile {

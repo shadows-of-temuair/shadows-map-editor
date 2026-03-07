@@ -28,6 +28,7 @@ pub enum Tool {
     Fill,
     Eyedropper,
     Shape,
+    Stamp,
 }
 
 impl Tool {
@@ -40,6 +41,7 @@ impl Tool {
             Tool::Fill => "Fill (G)",
             Tool::Eyedropper => "Eyedropper (I)",
             Tool::Shape => "Shape (U)",
+            Tool::Stamp => "Prefab (P)",
         }
     }
 
@@ -52,6 +54,7 @@ impl Tool {
             Tool::Fill => icons::draw_icon_fill(painter, rect, color),
             Tool::Eyedropper => icons::draw_icon_eyedropper(painter, rect, color),
             Tool::Shape => icons::draw_icon_shapes(painter, rect, color),
+            Tool::Stamp => icons::draw_icon_prefab(painter, rect, color),
         }
     }
 }
@@ -136,10 +139,14 @@ impl ToolbarPanel {
                 &str,
                 ToolbarAction,
             )] = &[
-                (icons::draw_icon_new, "New (Cmd+N)", ToolbarAction::NewFile),
+                (
+                    icons::draw_icon_new,
+                    "New Map (Cmd+N)",
+                    ToolbarAction::NewFile,
+                ),
                 (
                     icons::draw_icon_open,
-                    "Open (Cmd+O)",
+                    "Open Map (Cmd+O)",
                     ToolbarAction::OpenFile,
                 ),
                 (
@@ -174,9 +181,10 @@ impl ToolbarPanel {
             for &tool in &[
                 Tool::Select,
                 Tool::Pencil,
+                Tool::Stamp,
                 Tool::Line,
-                Tool::Eraser,
                 Tool::Fill,
+                Tool::Eraser,
                 Tool::Eyedropper,
             ] {
                 let is_active = *active_tool == tool;

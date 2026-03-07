@@ -9,6 +9,7 @@ pub mod export;
 mod map_list;
 mod palette_lookup;
 mod panels;
+mod prefab;
 mod shape;
 mod theme;
 mod widgets;

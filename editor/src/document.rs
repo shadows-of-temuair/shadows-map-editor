@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use eframe::egui;
 use tracing::warn;
 
-use crate::map_list::MapMetadataHint;
+use crate::{
+    map_list::MapMetadataHint,
+    prefab::{PrefabFile, load_prefab_asset, placement_anchor, sanitize_prefab_name},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaintLayer {
@@ -22,44 +25,79 @@ impl PaintLayer {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DocumentKind {
+    Map,
+    Prefab,
+}
+
+impl DocumentKind {
+    pub fn noun(self) -> &'static str {
+        match self {
+            DocumentKind::Map => "map",
+            DocumentKind::Prefab => "prefab",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 #[allow(dead_code)]
 enum EditChange {
-    Ground { idx: usize, old: u16, new: u16 },
-    LeftWall { idx: usize, old: u16, new: u16 },
-    RightWall { idx: usize, old: u16, new: u16 },
+    Ground {
+        idx: usize,
+        old: u16,
+        new: u16,
+    },
+    LeftWall {
+        idx: usize,
+        old: u16,
+        new: u16,
+    },
+    RightWall {
+        idx: usize,
+        old: u16,
+        new: u16,
+    },
+    Tile {
+        idx: usize,
+        old: map::Tile,
+        new: map::Tile,
+    },
 }
 
 impl EditChange {
     fn apply_undo(&self, map: &mut map::Map) {
-        let (idx, value, layer) = match self {
-            EditChange::Ground { idx, old, .. } => (*idx, *old, 0u8),
-            EditChange::LeftWall { idx, old, .. } => (*idx, *old, 1u8),
-            EditChange::RightWall { idx, old, .. } => (*idx, *old, 2u8),
-        };
-        let Some(tile) = map.tiles.get_mut(idx) else {
+        let Some(tile) = map.tiles.get_mut(self.idx()) else {
             return;
         };
-        match layer {
-            0 => tile.ground = value,
-            1 => tile.left_wall = value,
-            _ => tile.right_wall = value,
+
+        match self {
+            EditChange::Ground { old, .. } => tile.ground = *old,
+            EditChange::LeftWall { old, .. } => tile.left_wall = *old,
+            EditChange::RightWall { old, .. } => tile.right_wall = *old,
+            EditChange::Tile { old, .. } => *tile = *old,
         }
     }
 
     fn apply_redo(&self, map: &mut map::Map) {
-        let (idx, value, layer) = match self {
-            EditChange::Ground { idx, new, .. } => (*idx, *new, 0u8),
-            EditChange::LeftWall { idx, new, .. } => (*idx, *new, 1u8),
-            EditChange::RightWall { idx, new, .. } => (*idx, *new, 2u8),
-        };
-        let Some(tile) = map.tiles.get_mut(idx) else {
+        let Some(tile) = map.tiles.get_mut(self.idx()) else {
             return;
         };
-        match layer {
-            0 => tile.ground = value,
-            1 => tile.left_wall = value,
-            _ => tile.right_wall = value,
+
+        match self {
+            EditChange::Ground { new, .. } => tile.ground = *new,
+            EditChange::LeftWall { new, .. } => tile.left_wall = *new,
+            EditChange::RightWall { new, .. } => tile.right_wall = *new,
+            EditChange::Tile { new, .. } => *tile = *new,
+        }
+    }
+
+    fn idx(&self) -> usize {
+        match self {
+            EditChange::Ground { idx, .. }
+            | EditChange::LeftWall { idx, .. }
+            | EditChange::RightWall { idx, .. }
+            | EditChange::Tile { idx, .. } => *idx,
         }
     }
 }
@@ -100,12 +138,18 @@ impl Default for LayerVisibility {
     }
 }
 
+pub struct StampResult {
+    pub changed_tiles: usize,
+    pub clipped_tiles: usize,
+}
+
 pub struct MapDocument {
+    kind: DocumentKind,
     pub map: map::Map,
     pub path: Option<PathBuf>,
     pub dirty: bool,
-    pub map_id_hint: Option<u32>,
-    pub map_name_hint: Option<String>,
+    pub id_hint: Option<u32>,
+    pub name_hint: Option<String>,
     pub camera: Camera,
     undo_stack: Vec<Vec<EditChange>>,
     redo_stack: Vec<Vec<EditChange>>,
@@ -114,12 +158,25 @@ pub struct MapDocument {
 
 impl MapDocument {
     pub fn new(width: u16, height: u16) -> Self {
+        Self::new_map(width, height)
+    }
+
+    pub fn new_map(width: u16, height: u16) -> Self {
+        Self::new_with_kind(DocumentKind::Map, width, height)
+    }
+
+    pub fn new_prefab(width: u16, height: u16) -> Self {
+        Self::new_with_kind(DocumentKind::Prefab, width, height)
+    }
+
+    fn new_with_kind(kind: DocumentKind, width: u16, height: u16) -> Self {
         Self {
+            kind,
             map: map::Map::new(width, height),
             path: None,
             dirty: false,
-            map_id_hint: None,
-            map_name_hint: None,
+            id_hint: None,
+            name_hint: None,
             camera: Camera::default(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -127,11 +184,14 @@ impl MapDocument {
         }
     }
 
-    pub fn open(path: PathBuf, metadata_hint: Option<MapMetadataHint>) -> std::io::Result<Self> {
+    pub fn open_map(
+        path: PathBuf,
+        metadata_hint: Option<MapMetadataHint>,
+    ) -> std::io::Result<Self> {
         let mut map = map::Map::load(&path)?;
 
-        let map_id_hint = metadata_hint.as_ref().map(|hint| hint.map_id);
-        let map_name_hint = metadata_hint.as_ref().map(|hint| hint.map_name.clone());
+        let id_hint = metadata_hint.as_ref().map(|hint| hint.map_id);
+        let name_hint = metadata_hint.as_ref().map(|hint| hint.map_name.clone());
 
         if let Some((width, height)) = metadata_hint.and_then(|hint| hint.map_size) {
             let hinted_count = width as usize * height as usize;
@@ -151,11 +211,28 @@ impl MapDocument {
         }
 
         Ok(Self {
+            kind: DocumentKind::Map,
             map,
             path: Some(path),
             dirty: false,
-            map_id_hint,
-            map_name_hint,
+            id_hint,
+            name_hint,
+            camera: Camera::default(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            pending_stroke: None,
+        })
+    }
+
+    pub fn open_prefab(path: PathBuf) -> std::io::Result<Self> {
+        let asset = load_prefab_asset(&path)?;
+        Ok(Self {
+            kind: DocumentKind::Prefab,
+            map: asset.map,
+            path: Some(path),
+            dirty: false,
+            id_hint: None,
+            name_hint: Some(asset.name),
             camera: Camera::default(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -165,10 +242,33 @@ impl MapDocument {
 
     pub fn save_as(&mut self, path: PathBuf) -> std::io::Result<()> {
         self.finish_stroke();
-        self.map.save(&path)?;
+
+        match self.kind {
+            DocumentKind::Map => {
+                self.map.save(&path)?;
+            }
+            DocumentKind::Prefab => {
+                let file_name = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .map(ToOwned::to_owned)
+                    .or_else(|| self.name_hint.clone());
+                let prefab = PrefabFile::from_map(&self.map, file_name);
+                prefab.save(&path)?;
+                self.name_hint = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .map(|stem| stem.to_string());
+            }
+        }
+
         self.path = Some(path);
         self.dirty = false;
         Ok(())
+    }
+
+    pub fn kind(&self) -> DocumentKind {
+        self.kind
     }
 
     pub fn set_dimensions(&mut self, width: u16, height: u16) -> Result<(), String> {
@@ -183,14 +283,16 @@ impl MapDocument {
         let mut new_tiles = Vec::new();
         if let Err(err) = new_tiles.try_reserve_exact(new_count) {
             return Err(format!(
-                "Unable to resize map to {}x{} ({} tiles): {}",
-                width, height, new_count, err
+                "Unable to resize {} to {}x{} ({} tiles): {}",
+                self.kind.noun(),
+                width,
+                height,
+                new_count,
+                err
             ));
         }
         new_tiles.resize(new_count, map::Tile::default());
 
-        // Preserve tile data in linear order; changing dimensions only changes
-        // how `(col,row)` indices map onto the same flat buffer.
         let copy_count = old_count.min(new_count);
         new_tiles[..copy_count].copy_from_slice(&self.map.tiles[..copy_count]);
 
@@ -205,28 +307,83 @@ impl MapDocument {
     }
 
     pub fn display_name(&self) -> String {
-        if let Some(name) = &self.map_name_hint {
-            if let Some(map_id) = self.map_id_hint {
-                return format!("{map_id} - {name}");
+        match self.kind {
+            DocumentKind::Map => {
+                if let Some(name) = &self.name_hint {
+                    if let Some(map_id) = self.id_hint {
+                        return format!("{map_id} - {name}");
+                    }
+                    return name.clone();
+                }
+                self.tab_display_name()
             }
-            return name.clone();
+            DocumentKind::Prefab => format!("Prefab {}", self.prefab_name()),
         }
-
-        self.tab_display_name()
     }
 
     pub fn tab_display_name(&self) -> String {
-        if let Some(name) = &self.map_name_hint {
-            return name.clone();
-        }
+        match self.kind {
+            DocumentKind::Map => {
+                if let Some(name) = &self.name_hint {
+                    return name.clone();
+                }
 
-        match &self.path {
-            Some(p) => p
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("Unknown")
-                .to_string(),
-            None => "Untitled".to_string(),
+                match &self.path {
+                    Some(path) => path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("Unknown")
+                        .to_string(),
+                    None => String::from("Untitled"),
+                }
+            }
+            DocumentKind::Prefab => format!("prefab: {}", self.prefab_name()),
+        }
+    }
+
+    pub fn prefab_name(&self) -> String {
+        self.name_hint
+            .clone()
+            .or_else(|| {
+                self.path
+                    .as_ref()
+                    .and_then(|path| path.file_stem())
+                    .and_then(|stem| stem.to_str())
+                    .map(ToOwned::to_owned)
+            })
+            .unwrap_or_else(|| String::from("Untitled"))
+    }
+
+    pub fn suggested_filename(&self) -> String {
+        match self.kind {
+            DocumentKind::Map => {
+                let mut name = self
+                    .path
+                    .as_ref()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| {
+                        let base = self.display_name();
+                        if base.eq_ignore_ascii_case("Untitled") {
+                            String::from("untitled.map")
+                        } else {
+                            format!("{base}.map")
+                        }
+                    });
+                if !name.to_ascii_lowercase().ends_with(".map") {
+                    name.push_str(".map");
+                }
+                name
+            }
+            DocumentKind::Prefab => {
+                let base = sanitize_prefab_name(&self.prefab_name());
+                if base.is_empty() {
+                    String::from("untitled-prefab.ron")
+                } else {
+                    format!("{base}.ron")
+                }
+            }
         }
     }
 
@@ -329,10 +486,84 @@ impl MapDocument {
             })
             .collect::<Vec<_>>();
 
+        self.push_history(changes)
+    }
+
+    fn push_history(&mut self, changes: Vec<EditChange>) -> bool {
+        if changes.is_empty() {
+            return false;
+        }
         self.undo_stack.push(changes);
         self.redo_stack.clear();
         self.dirty = true;
         true
+    }
+
+    pub fn apply_prefab_stamp(&mut self, origin: (u16, u16), prefab: &map::Map) -> StampResult {
+        self.finish_stroke();
+
+        let mut changes = Vec::new();
+        let mut clipped_tiles = 0usize;
+        let anchor = placement_anchor(prefab);
+
+        for prefab_row in 0..prefab.height {
+            for prefab_col in 0..prefab.width {
+                let source_idx = prefab_row as usize * prefab.width as usize + prefab_col as usize;
+                let source_tile = prefab.tiles[source_idx];
+                if source_tile.ground == 0
+                    && source_tile.left_wall == 0
+                    && source_tile.right_wall == 0
+                {
+                    continue;
+                }
+
+                let dst_col = i32::from(origin.0) + i32::from(prefab_col) - i32::from(anchor.0);
+                let dst_row = i32::from(origin.1) + i32::from(prefab_row) - i32::from(anchor.1);
+                if dst_col < 0
+                    || dst_row < 0
+                    || dst_col >= i32::from(self.map.width)
+                    || dst_row >= i32::from(self.map.height)
+                {
+                    clipped_tiles += 1;
+                    continue;
+                }
+
+                let dst_col = dst_col as usize;
+                let dst_row = dst_row as usize;
+                let dst_idx = dst_row * self.map.width as usize + dst_col;
+                let old_tile = self.map.tiles[dst_idx];
+                let mut new_tile = old_tile;
+
+                if source_tile.ground != 0 {
+                    new_tile.ground = source_tile.ground;
+                }
+                if source_tile.left_wall != 0 {
+                    new_tile.left_wall = source_tile.left_wall;
+                }
+                if source_tile.right_wall != 0 {
+                    new_tile.right_wall = source_tile.right_wall;
+                }
+
+                if new_tile == old_tile {
+                    continue;
+                }
+
+                self.map.tiles[dst_idx] = new_tile;
+                changes.push(EditChange::Tile {
+                    idx: dst_idx,
+                    old: old_tile,
+                    new: new_tile,
+                });
+            }
+        }
+
+        let changed_tiles = changes.len();
+        self.push_history(changes);
+
+        StampResult {
+            changed_tiles,
+            clipped_tiles,
+        }
     }
 
     pub fn undo(&mut self) -> bool {
@@ -372,7 +603,7 @@ mod tests {
 
     #[test]
     fn resize_grows_and_preserves_linear_prefix() {
-        let mut doc = MapDocument::new(2, 2);
+        let mut doc = MapDocument::new_map(2, 2);
         doc.map.tiles[0].ground = 10;
         doc.map.tiles[1].ground = 11;
         doc.map.tiles[2].ground = 12;
@@ -392,7 +623,7 @@ mod tests {
 
     #[test]
     fn resize_shrinks_and_truncates_from_end() {
-        let mut doc = MapDocument::new(3, 2);
+        let mut doc = MapDocument::new_map(3, 2);
         for (idx, tile) in doc.map.tiles.iter_mut().enumerate() {
             tile.ground = idx as u16 + 1;
         }
@@ -410,7 +641,7 @@ mod tests {
 
     #[test]
     fn resize_same_tile_count_preserves_all_tiles() {
-        let mut doc = MapDocument::new(20, 20);
+        let mut doc = MapDocument::new_map(20, 20);
         for (idx, tile) in doc.map.tiles.iter_mut().enumerate() {
             let id = idx as u16 + 1;
             tile.ground = id;
@@ -433,7 +664,7 @@ mod tests {
 
     #[test]
     fn resize_shrink_then_regrow_keeps_truncated_prefix() {
-        let mut doc = MapDocument::new(20, 20);
+        let mut doc = MapDocument::new_map(20, 20);
         for (idx, tile) in doc.map.tiles.iter_mut().enumerate() {
             tile.ground = idx as u16 + 1;
         }
@@ -452,7 +683,7 @@ mod tests {
 
     #[test]
     fn wall_stroke_undo_redo_roundtrip() {
-        let mut doc = MapDocument::new(2, 2);
+        let mut doc = MapDocument::new_map(2, 2);
 
         assert!(doc.paint_layer_stroke_tile(PaintLayer::LeftWall, 0, 0, 12));
         assert!(doc.paint_layer_stroke_tile(PaintLayer::LeftWall, 1, 0, 12));
@@ -467,5 +698,44 @@ mod tests {
         assert!(doc.redo());
         assert_eq!(doc.map.tiles[0].left_wall, 12);
         assert_eq!(doc.map.tiles[1].left_wall, 12);
+    }
+
+    #[test]
+    fn prefab_stamp_roundtrip_supports_undo_redo() {
+        let mut doc = MapDocument::new_map(4, 4);
+        doc.map.tiles[0].ground = 3;
+
+        let mut prefab = map::Map::new(2, 1);
+        prefab.tiles[0].left_wall = 100;
+        prefab.tiles[1].right_wall = 101;
+
+        let result = doc.apply_prefab_stamp((1, 1), &prefab);
+        assert_eq!(result.changed_tiles, 2);
+        assert_eq!(result.clipped_tiles, 0);
+        assert_eq!(doc.map.tiles[5].left_wall, 100);
+        assert_eq!(doc.map.tiles[6].right_wall, 101);
+
+        assert!(doc.undo());
+        assert_eq!(doc.map.tiles[5].left_wall, 0);
+        assert_eq!(doc.map.tiles[6].right_wall, 0);
+
+        assert!(doc.redo());
+        assert_eq!(doc.map.tiles[5].left_wall, 100);
+        assert_eq!(doc.map.tiles[6].right_wall, 101);
+    }
+
+    #[test]
+    fn prefab_stamp_centers_on_occupied_bounds() {
+        let mut doc = MapDocument::new_map(8, 8);
+        let mut prefab = map::Map::new(6, 6);
+        prefab.tiles[1 * 6 + 2].ground = 7;
+        prefab.tiles[3 * 6 + 4].left_wall = 108;
+
+        let result = doc.apply_prefab_stamp((3, 3), &prefab);
+
+        assert_eq!(result.changed_tiles, 2);
+        assert_eq!(result.clipped_tiles, 0);
+        assert_eq!(doc.map.tiles[2 * 8 + 2].ground, 7);
+        assert_eq!(doc.map.tiles[4 * 8 + 4].left_wall, 108);
     }
 }

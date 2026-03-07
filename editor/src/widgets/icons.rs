@@ -13,6 +13,7 @@ const TOOL_ICON_LINE: &str = "\u{E205}";
 const TOOL_ICON_ERASER: &str = "\u{1F4A3}";
 const TOOL_ICON_FILL: &str = "\u{E225}";
 const TOOL_ICON_EYEDROPPER: &str = "\u{E200}";
+const TOOL_ICON_PREFAB: &str = "\u{E2A1}";
 
 pub fn install_font(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
@@ -128,6 +129,11 @@ pub fn draw_icon_shapes(painter: &egui::Painter, rect: egui::Rect, color: egui::
         scale * 0.62,
         stroke,
     );
+}
+
+/// Draw the prefab placement glyph from the icon font.
+pub fn draw_icon_prefab(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    draw_symbol_icon(painter, rect, color, TOOL_ICON_PREFAB);
 }
 
 /// Draw a square outline (Square shape tool).

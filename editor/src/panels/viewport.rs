@@ -2,6 +2,7 @@ use eframe::egui;
 
 use super::toolbar::Tool;
 use crate::document::{Camera, LayerVisibility, PaintLayer};
+use crate::prefab;
 use crate::shape::{self, ShapeKind};
 use crate::theme::{ThemeColors, theme_colors};
 use crate::widgets::tooltip;
@@ -28,6 +29,7 @@ pub struct ViewportResult {
     pub pencil_shift_clicked_tile: Option<(u16, u16)>,
     pub line_clicked_tile: Option<(u16, u16)>,
     pub shape_clicked_tile: Option<(u16, u16)>,
+    pub stamp_clicked_tile: Option<(u16, u16)>,
     pub eyedropper_pick: Option<EyedropperPick>,
 }
 
@@ -52,6 +54,7 @@ impl ViewportPanel {
         selected_wall_tile: u16,
         line_preview_start: Option<(u16, u16)>,
         shape_preview_start: Option<(u16, u16)>,
+        stamp_prefab: Option<&map::Map>,
         tile_atlas: Option<&render::TileAtlas>,
         atlas_texture: Option<&egui::TextureHandle>,
         wall_atlas: Option<&render::SpriteAtlas>,
@@ -315,6 +318,27 @@ impl ViewportPanel {
                                         result.clicked_tile = Some((col, row));
                                     }
                                 }
+                                Tool::Stamp => {
+                                    if let Some(prefab) = stamp_prefab {
+                                        cursor_icon = Some(egui::CursorIcon::Crosshair);
+                                        Self::draw_prefab_preview(
+                                            &painter,
+                                            prefab,
+                                            (col, row),
+                                            origin,
+                                            half_w,
+                                            half_h,
+                                            tile_atlas,
+                                            atlas_texture,
+                                            wall_atlas,
+                                            wall_texture,
+                                        );
+                                        if response.clicked_by(egui::PointerButton::Primary) {
+                                            result.stamp_clicked_tile = Some((col, row));
+                                            result.clicked_tile = Some((col, row));
+                                        }
+                                    }
+                                }
                                 Tool::Eyedropper => {
                                     cursor_icon = Some(egui::CursorIcon::Crosshair);
                                     let idx = row as usize * map.width as usize + col as usize;
@@ -338,6 +362,7 @@ impl ViewportPanel {
                                                 tile_atlas,
                                                 atlas_texture,
                                                 tile_id,
+                                                180,
                                             );
                                         }
                                         EyedropperPick::LeftWall(wall_id) if wall_id != 0 => {
@@ -352,6 +377,7 @@ impl ViewportPanel {
                                                 wall_texture,
                                                 wall_id,
                                                 true,
+                                                180,
                                             );
                                         }
                                         EyedropperPick::RightWall(wall_id) if wall_id != 0 => {
@@ -366,6 +392,7 @@ impl ViewportPanel {
                                                 wall_texture,
                                                 wall_id,
                                                 false,
+                                                180,
                                             );
                                         }
                                         _ => {}
@@ -1063,6 +1090,39 @@ impl ViewportPanel {
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
     ) {
+        Self::draw_paint_preview_alpha(
+            painter,
+            col,
+            row,
+            origin,
+            half_w,
+            half_h,
+            paint_layer,
+            paint_value,
+            tile_atlas,
+            tile_texture,
+            wall_atlas,
+            wall_texture,
+            180,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_paint_preview_alpha(
+        painter: &egui::Painter,
+        col: u16,
+        row: u16,
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+        paint_layer: PaintLayer,
+        paint_value: u16,
+        tile_atlas: Option<&render::TileAtlas>,
+        tile_texture: Option<&egui::TextureHandle>,
+        wall_atlas: Option<&render::SpriteAtlas>,
+        wall_texture: Option<&egui::TextureHandle>,
+        alpha: u8,
+    ) {
         match paint_layer {
             PaintLayer::Ground => Self::draw_ground_preview(
                 painter,
@@ -1074,6 +1134,7 @@ impl ViewportPanel {
                 tile_atlas,
                 tile_texture,
                 paint_value,
+                alpha,
             ),
             PaintLayer::LeftWall => Self::draw_wall_preview(
                 painter,
@@ -1086,6 +1147,7 @@ impl ViewportPanel {
                 wall_texture,
                 paint_value,
                 true,
+                alpha,
             ),
             PaintLayer::RightWall => Self::draw_wall_preview(
                 painter,
@@ -1098,6 +1160,7 @@ impl ViewportPanel {
                 wall_texture,
                 paint_value,
                 false,
+                alpha,
             ),
         }
     }
@@ -1113,6 +1176,7 @@ impl ViewportPanel {
         tile_atlas: Option<&render::TileAtlas>,
         tile_texture: Option<&egui::TextureHandle>,
         selected_ground_tile: u16,
+        alpha: u8,
     ) {
         let (atlas, texture) = match (tile_atlas, tile_texture) {
             (Some(a), Some(t)) => (a, t),
@@ -1137,7 +1201,7 @@ impl ViewportPanel {
         mesh.add_rect_with_uv(
             tile_rect,
             uv,
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180),
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, alpha),
         );
         painter.add(egui::Shape::mesh(mesh));
     }
@@ -1154,6 +1218,7 @@ impl ViewportPanel {
         wall_texture: Option<&egui::TextureHandle>,
         wall_id: u16,
         is_left_wall: bool,
+        alpha: u8,
     ) {
         let (atlas, texture) = match (wall_atlas, wall_texture) {
             (Some(a), Some(t)) => (a, t),
@@ -1194,9 +1259,96 @@ impl ViewportPanel {
         mesh.add_rect_with_uv(
             sprite_rect,
             uv,
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180),
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, alpha),
         );
         painter.add(egui::Shape::mesh(mesh));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_prefab_preview(
+        painter: &egui::Painter,
+        prefab: &map::Map,
+        origin_tile: (u16, u16),
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+        tile_atlas: Option<&render::TileAtlas>,
+        tile_texture: Option<&egui::TextureHandle>,
+        wall_atlas: Option<&render::SpriteAtlas>,
+        wall_texture: Option<&egui::TextureHandle>,
+    ) {
+        let anchor = prefab::placement_anchor(prefab);
+
+        for prefab_row in 0..prefab.height {
+            for prefab_col in 0..prefab.width {
+                let idx = prefab_row as usize * prefab.width as usize + prefab_col as usize;
+                let tile = prefab.tiles[idx];
+                let dst_col =
+                    i32::from(origin_tile.0) + i32::from(prefab_col) - i32::from(anchor.0);
+                let dst_row =
+                    i32::from(origin_tile.1) + i32::from(prefab_row) - i32::from(anchor.1);
+                if dst_col < 0
+                    || dst_row < 0
+                    || dst_col > i32::from(u16::MAX)
+                    || dst_row > i32::from(u16::MAX)
+                {
+                    continue;
+                }
+                let (dst_col, dst_row) = (dst_col as u16, dst_row as u16);
+
+                if tile.ground != 0 {
+                    Self::draw_paint_preview_alpha(
+                        painter,
+                        dst_col,
+                        dst_row,
+                        origin,
+                        half_w,
+                        half_h,
+                        PaintLayer::Ground,
+                        tile.ground,
+                        tile_atlas,
+                        tile_texture,
+                        wall_atlas,
+                        wall_texture,
+                        140,
+                    );
+                }
+                if tile.left_wall != 0 {
+                    Self::draw_paint_preview_alpha(
+                        painter,
+                        dst_col,
+                        dst_row,
+                        origin,
+                        half_w,
+                        half_h,
+                        PaintLayer::LeftWall,
+                        tile.left_wall,
+                        tile_atlas,
+                        tile_texture,
+                        wall_atlas,
+                        wall_texture,
+                        150,
+                    );
+                }
+                if tile.right_wall != 0 {
+                    Self::draw_paint_preview_alpha(
+                        painter,
+                        dst_col,
+                        dst_row,
+                        origin,
+                        half_w,
+                        half_h,
+                        PaintLayer::RightWall,
+                        tile.right_wall,
+                        tile_atlas,
+                        tile_texture,
+                        wall_atlas,
+                        wall_texture,
+                        150,
+                    );
+                }
+            }
+        }
     }
 
     fn draw_erase_preview(
