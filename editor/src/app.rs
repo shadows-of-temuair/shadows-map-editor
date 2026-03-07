@@ -2810,12 +2810,17 @@ impl eframe::App for EditorApp {
                             original_selection,
                             selection_duplicate_layers,
                         );
+                        let (width, height) = original_selection.dimensions();
                         let changed = doc.paste_visible_layers(
                             (preview_min_col, preview_min_row),
                             &source,
                             selection_duplicate_layers,
                         );
-                        doc.set_selection(Some(original_selection));
+                        doc.set_selection(Some(TileSelection::from_top_left_size(
+                            (preview_min_col, preview_min_row),
+                            width,
+                            height,
+                        )));
                         if changed > 0 {
                             self.status_message = format!(
                                 "Duplicated selection to {}, {}.",

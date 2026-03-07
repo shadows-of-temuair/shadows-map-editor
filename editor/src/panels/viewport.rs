@@ -670,6 +670,9 @@ impl ViewportPanel {
                 let selection_context_tile = ui
                     .ctx()
                     .data(|data| data.get_temp::<(u16, u16)>(selection_context_tile_id));
+                let can_create_prefab = current_selection
+                    .map(|selection| Self::selection_contains_tiles(map, selection))
+                    .unwrap_or(false);
                 let show_selection_context_menu = !paste_preview_active
                     && selection_context_tile.is_some()
                     && (active_tool == Tool::Select || selection_clipboard_available);
@@ -738,7 +741,7 @@ impl ViewportPanel {
                                 "Create Prefab...",
                                 None,
                                 None,
-                                true,
+                                can_create_prefab,
                             )
                                 .clicked()
                             {
@@ -1506,6 +1509,20 @@ impl ViewportPanel {
         ];
         outline.dedup_by(|a, b| a.distance_sq(*b) < 0.01);
         painter.add(egui::Shape::closed_line(outline, stroke));
+    }
+
+    fn selection_contains_tiles(map: &map::Map, selection: TileSelection) -> bool {
+        let (min_col, min_row, max_col, max_row) = selection.normalized_bounds();
+        for row in min_row..=max_row {
+            for col in min_col..=max_col {
+                let idx = row as usize * map.width as usize + col as usize;
+                let tile = map.tiles[idx];
+                if tile.ground != 0 || tile.left_wall != 0 || tile.right_wall != 0 {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn draw_tile_selection_outline(
