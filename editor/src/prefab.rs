@@ -68,6 +68,30 @@ pub fn occupied_bounds(map: &map::Map) -> Option<OccupiedBounds> {
     })
 }
 
+pub fn trimmed_map(map: &map::Map, include_ground: bool) -> Option<map::Map> {
+    let mut working = map.clone();
+    if !include_ground {
+        for tile in &mut working.tiles {
+            tile.ground = 0;
+        }
+    }
+
+    let bounds = occupied_bounds(&working)?;
+    let mut trimmed = map::Map::new(bounds.width(), bounds.height());
+
+    for row in 0..bounds.height() {
+        for col in 0..bounds.width() {
+            let src_col = bounds.min_col + col;
+            let src_row = bounds.min_row + row;
+            let src_idx = src_row as usize * working.width as usize + src_col as usize;
+            let dst_idx = row as usize * trimmed.width as usize + col as usize;
+            trimmed.tiles[dst_idx] = working.tiles[src_idx];
+        }
+    }
+
+    Some(trimmed)
+}
+
 pub fn placement_anchor(map: &map::Map) -> (u16, u16) {
     occupied_bounds(map)
         .map(|bounds| {
@@ -343,6 +367,32 @@ mod tests {
         map.tiles[3 * 6 + 4].left_wall = 10;
 
         assert_eq!(placement_anchor(&map), (3, 2));
+    }
+
+    #[test]
+    fn trimmed_map_removes_empty_border() {
+        let mut map = map::Map::new(5, 4);
+        map.tiles[1 * 5 + 2].left_wall = 10;
+        map.tiles[2 * 5 + 3].right_wall = 20;
+
+        let trimmed = trimmed_map(&map, false).unwrap();
+        assert_eq!(trimmed.width, 2);
+        assert_eq!(trimmed.height, 2);
+        assert_eq!(trimmed.tiles[0].left_wall, 10);
+        assert_eq!(trimmed.tiles[3].right_wall, 20);
+    }
+
+    #[test]
+    fn trimmed_map_omits_ground_when_requested() {
+        let mut map = map::Map::new(3, 3);
+        map.tiles[0].ground = 7;
+        map.tiles[4].left_wall = 9;
+
+        let trimmed = trimmed_map(&map, false).unwrap();
+        assert_eq!(trimmed.width, 1);
+        assert_eq!(trimmed.height, 1);
+        assert_eq!(trimmed.tiles[0].ground, 0);
+        assert_eq!(trimmed.tiles[0].left_wall, 9);
     }
 
     #[test]

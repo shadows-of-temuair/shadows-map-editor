@@ -1,11 +1,19 @@
 use eframe::egui;
 
 use super::toolbar::Tool;
-use crate::document::{Camera, LayerVisibility, PaintLayer};
+use crate::document::{Camera, LayerVisibility, PaintLayer, TileSelection};
 use crate::prefab;
 use crate::shape::{self, ShapeKind};
 use crate::theme::{ThemeColors, theme_colors};
-use crate::widgets::tooltip;
+use crate::widgets::{icons, tooltip};
+
+const SELECTION_AUTO_PAN_MARGIN: f32 = 56.0;
+const SELECTION_AUTO_PAN_SPEED: f32 = 520.0;
+const CONTEXT_ICON_CUT: &str = "\u{2702}";
+const CONTEXT_ICON_COPY: &str = "\u{E202}";
+const CONTEXT_ICON_PASTE: &str = "\u{1F4CB}";
+const CONTEXT_ICON_CREATE_PREFAB: &str = "\u{EB03}";
+const CONTEXT_ICON_DELETE: &str = "\u{1F5D1}";
 
 /// Returns true if a wall tile ID should be rendered.
 ///
@@ -19,10 +27,27 @@ fn is_rendered_wall(id: u16) -> bool {
     (id > 10012) || ((id % 10000) > 12)
 }
 
+fn is_layer_visible(layers: &LayerVisibility, layer: PaintLayer) -> bool {
+    match layer {
+        PaintLayer::Ground => layers.ground,
+        PaintLayer::LeftWall => layers.left_wall,
+        PaintLayer::RightWall => layers.right_wall,
+    }
+}
+
 #[derive(Default)]
 pub struct ViewportResult {
     pub hover_tile: Option<(u16, u16)>,
     pub clicked_tile: Option<(u16, u16)>,
+    pub selection_drag_started: Option<(u16, u16)>,
+    pub selection_drag_tile: Option<(u16, u16)>,
+    pub cut_selection_requested: bool,
+    pub copy_selection_requested: bool,
+    pub activate_paste_preview: bool,
+    pub paste_preview_clicked_tile: Option<(u16, u16)>,
+    pub cancel_paste_preview: bool,
+    pub create_prefab_requested: bool,
+    pub delete_selection_requested: bool,
     pub painted_tile: Option<(u16, u16, u16)>,
     pub fill_clicked_tile: Option<(u16, u16, u16)>,
     pub pencil_clicked_tile: Option<(u16, u16)>,
@@ -31,6 +56,13 @@ pub struct ViewportResult {
     pub shape_clicked_tile: Option<(u16, u16)>,
     pub stamp_clicked_tile: Option<(u16, u16)>,
     pub eyedropper_pick: Option<EyedropperPick>,
+}
+
+#[derive(Clone, Copy)]
+pub struct SelectionMovePreview<'a> {
+    pub map: &'a map::Map,
+    pub top_left: (u16, u16),
+    pub layers: LayerVisibility,
 }
 
 #[derive(Clone, Copy)]
@@ -54,6 +86,13 @@ impl ViewportPanel {
         selected_wall_tile: u16,
         line_preview_start: Option<(u16, u16)>,
         shape_preview_start: Option<(u16, u16)>,
+        current_selection: Option<TileSelection>,
+        selection_move_active: bool,
+        selection_drag_start_tile: Option<(u16, u16)>,
+        selection_move_preview: Option<SelectionMovePreview<'_>>,
+        paste_preview: Option<SelectionMovePreview<'_>>,
+        paste_preview_anchor: Option<(u16, u16)>,
+        selection_clipboard_available: bool,
         stamp_prefab: Option<&map::Map>,
         tile_atlas: Option<&render::TileAtlas>,
         atlas_texture: Option<&egui::TextureHandle>,
@@ -67,6 +106,7 @@ impl ViewportPanel {
     ) -> ViewportResult {
         let colors = theme_colors();
         let mut result = ViewportResult::default();
+        let paste_preview_active = paste_preview.is_some();
         let selected_paint_tile = match paint_layer {
             PaintLayer::Ground => selected_ground_tile,
             PaintLayer::LeftWall | PaintLayer::RightWall => selected_wall_tile,
@@ -85,6 +125,7 @@ impl ViewportPanel {
                     ui.id().with("viewport"),
                     egui::Sense::click_and_drag(),
                 );
+                let context_menu_open = response.context_menu_opened();
                 let mut cursor_icon = if response.hovered() {
                     Some(egui::CursorIcon::Default)
                 } else {
@@ -109,6 +150,40 @@ impl ViewportPanel {
                         camera.zoom = (camera.zoom + steps * 0.05).clamp(0.25, 4.0);
                         // Scale offset to keep viewport center at the same map point
                         camera.offset *= camera.zoom / old_zoom;
+                    }
+                }
+
+                let overlay_rect = Self::overlay_rect(rect);
+                let primary_pressed =
+                    !context_menu_open
+                        && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
+                let primary_down =
+                    !context_menu_open
+                        && ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
+                let pointer_interact_pos = ui.input(|i| i.pointer.interact_pos());
+                let selection_press_valid = active_tool == Tool::Select
+                    && !paste_preview_active
+                    && primary_pressed
+                    && pointer_interact_pos
+                        .map(|pos| rect.contains(pos) && !overlay_rect.contains(pos))
+                        .unwrap_or(false);
+                let selection_drag_active = active_tool == Tool::Select
+                    && !paste_preview_active
+                    && primary_down
+                    && (selection_drag_start_tile.is_some() || selection_press_valid);
+
+                if active_tool == Tool::Select
+                    && !paste_preview_active
+                    && primary_down
+                    && selection_drag_start_tile.is_some()
+                {
+                    if let Some(pointer_pos) = pointer_interact_pos {
+                        let dt = ui.input(|i| i.predicted_dt.max(1.0 / 120.0));
+                        let auto_pan = Self::selection_auto_pan_delta(rect, pointer_pos, dt);
+                        if auto_pan != egui::Vec2::ZERO {
+                            camera.offset += auto_pan;
+                            ctx.request_repaint();
+                        }
                     }
                 }
 
@@ -176,276 +251,522 @@ impl ViewportPanel {
                     }
                 }
 
-                let overlay_rect = Self::overlay_rect(rect);
+                let mut selection_preview = None;
 
                 // Mouse → tile hover and click selection
-                if let Some(pointer_pos) = response.hover_pos() {
-                    if !overlay_rect.contains(pointer_pos) {
-                        let tile = Self::screen_to_tile(pointer_pos, origin, half_w, half_h, map);
+                let pointer_pos = if selection_drag_active {
+                    pointer_interact_pos.map(|pos| Self::clamp_point_to_rect(pos, rect.shrink(1.0)))
+                } else {
+                    response.hover_pos()
+                };
+                if let Some(pointer_pos) = pointer_pos {
+                    if selection_drag_active || !overlay_rect.contains(pointer_pos) {
+                        let tile = if selection_drag_active {
+                            Self::screen_to_tile_clamped(pointer_pos, origin, half_w, half_h, map)
+                        } else {
+                            Self::screen_to_tile(pointer_pos, origin, half_w, half_h, map)
+                        };
                         if let Some((col, row)) = tile {
                             result.hover_tile = Some((col, row));
 
-                            match active_tool {
-                                Tool::Pencil if selected_paint_tile != 0 => {
-                                    cursor_icon = Some(egui::CursorIcon::Crosshair);
-                                    Self::draw_paint_preview(
-                                        &painter,
-                                        col,
-                                        row,
-                                        origin,
-                                        half_w,
-                                        half_h,
-                                        paint_layer,
-                                        selected_paint_tile,
-                                        tile_atlas,
-                                        atlas_texture,
-                                        wall_atlas,
-                                        wall_texture,
-                                    );
-                                    let shift_held = ui.input(|i| i.modifiers.shift);
-                                    if response.clicked_by(egui::PointerButton::Primary) {
-                                        if shift_held {
-                                            result.pencil_shift_clicked_tile = Some((col, row));
-                                        } else {
-                                            result.pencil_clicked_tile = Some((col, row));
+                            if paste_preview_active {
+                                cursor_icon = Some(egui::CursorIcon::Crosshair);
+                                if response.clicked_by(egui::PointerButton::Primary) {
+                                    result.paste_preview_clicked_tile = Some((col, row));
+                                }
+                                if response.clicked_by(egui::PointerButton::Secondary) {
+                                    result.cancel_paste_preview = true;
+                                }
+                            } else {
+                                match active_tool {
+                                    Tool::Select => {
+                                        cursor_icon =
+                                            Some(if selection_move_active && primary_down {
+                                                egui::CursorIcon::Grabbing
+                                            } else {
+                                                egui::CursorIcon::Crosshair
+                                            });
+                                        if selection_press_valid {
+                                            result.selection_drag_started = Some((col, row));
+                                        }
+
+                                        if primary_down {
+                                            let anchor = result
+                                                .selection_drag_started
+                                                .or(selection_drag_start_tile);
+                                            if let Some(anchor) = anchor {
+                                                result.selection_drag_tile = Some((col, row));
+                                                if !selection_move_active {
+                                                    selection_preview =
+                                                        Some(TileSelection::from_points(
+                                                            anchor,
+                                                            (col, row),
+                                                        ));
+                                                }
+                                            }
+                                        } else if primary_pressed && !selection_move_active {
+                                            selection_preview = Some(TileSelection::from_points(
+                                                (col, row),
+                                                (col, row),
+                                            ));
                                         }
                                     }
-                                    let is_primary_painting = response.is_pointer_button_down_on()
-                                        && ui.input(|i| {
-                                            i.pointer.button_down(egui::PointerButton::Primary)
-                                        });
-                                    if is_primary_painting && !shift_held {
-                                        result.painted_tile = Some((col, row, selected_paint_tile));
-                                    }
-                                }
-                                Tool::Line if selected_paint_tile != 0 => {
-                                    cursor_icon = Some(egui::CursorIcon::Crosshair);
-                                    if let Some(start) = line_preview_start {
-                                        Self::draw_paint_line_preview(
-                                            &painter,
-                                            start,
-                                            (col, row),
-                                            origin,
-                                            half_w,
-                                            half_h,
-                                            paint_layer,
-                                            selected_paint_tile,
-                                            tile_atlas,
-                                            atlas_texture,
-                                            wall_atlas,
-                                            wall_texture,
-                                        );
-                                    } else {
-                                        Self::draw_paint_preview(
-                                            &painter,
-                                            col,
-                                            row,
-                                            origin,
-                                            half_w,
-                                            half_h,
-                                            paint_layer,
-                                            selected_paint_tile,
-                                            tile_atlas,
-                                            atlas_texture,
-                                            wall_atlas,
-                                            wall_texture,
-                                        );
-                                    }
-                                    if response.clicked_by(egui::PointerButton::Primary) {
-                                        result.line_clicked_tile = Some((col, row));
-                                        result.clicked_tile = Some((col, row));
-                                    }
-                                }
-                                Tool::Shape if selected_paint_tile != 0 => {
-                                    cursor_icon = Some(egui::CursorIcon::Crosshair);
-                                    if let Some(start) = shape_preview_start {
-                                        Self::draw_paint_shape_preview(
-                                            &painter,
-                                            map,
-                                            active_shape,
-                                            start,
-                                            (col, row),
-                                            origin,
-                                            half_w,
-                                            half_h,
-                                            paint_layer,
-                                            selected_paint_tile,
-                                            tile_atlas,
-                                            atlas_texture,
-                                            wall_atlas,
-                                            wall_texture,
-                                        );
-                                    } else {
-                                        Self::draw_paint_preview(
-                                            &painter,
-                                            col,
-                                            row,
-                                            origin,
-                                            half_w,
-                                            half_h,
-                                            paint_layer,
-                                            selected_paint_tile,
-                                            tile_atlas,
-                                            atlas_texture,
-                                            wall_atlas,
-                                            wall_texture,
-                                        );
-                                    }
-                                    if response.clicked_by(egui::PointerButton::Primary) {
-                                        result.shape_clicked_tile = Some((col, row));
-                                        result.clicked_tile = Some((col, row));
-                                    }
-                                }
-                                Tool::Fill if selected_paint_tile != 0 => {
-                                    cursor_icon = Some(egui::CursorIcon::Crosshair);
-                                    Self::draw_paint_preview(
-                                        &painter,
-                                        col,
-                                        row,
-                                        origin,
-                                        half_w,
-                                        half_h,
-                                        paint_layer,
-                                        selected_paint_tile,
-                                        tile_atlas,
-                                        atlas_texture,
-                                        wall_atlas,
-                                        wall_texture,
-                                    );
-                                    if response.clicked_by(egui::PointerButton::Primary) {
-                                        result.fill_clicked_tile =
-                                            Some((col, row, selected_paint_tile));
-                                        result.clicked_tile = Some((col, row));
-                                    }
-                                }
-                                Tool::Stamp => {
-                                    if let Some(prefab) = stamp_prefab {
+                                    Tool::Pencil if selected_paint_tile != 0 => {
                                         cursor_icon = Some(egui::CursorIcon::Crosshair);
-                                        Self::draw_prefab_preview(
+                                        Self::draw_paint_preview(
                                             &painter,
-                                            prefab,
-                                            (col, row),
+                                            col,
+                                            row,
                                             origin,
                                             half_w,
                                             half_h,
+                                            paint_layer,
+                                            selected_paint_tile,
+                                            tile_atlas,
+                                            atlas_texture,
+                                            wall_atlas,
+                                            wall_texture,
+                                        );
+                                        let shift_held = ui.input(|i| i.modifiers.shift);
+                                        if response.clicked_by(egui::PointerButton::Primary) {
+                                            if shift_held {
+                                                result.pencil_shift_clicked_tile = Some((col, row));
+                                            } else {
+                                                result.pencil_clicked_tile = Some((col, row));
+                                            }
+                                        }
+                                        let is_primary_painting = response
+                                            .is_pointer_button_down_on()
+                                            && ui.input(|i| {
+                                                i.pointer.button_down(egui::PointerButton::Primary)
+                                            });
+                                        if is_primary_painting && !shift_held {
+                                            result.painted_tile =
+                                                Some((col, row, selected_paint_tile));
+                                        }
+                                    }
+                                    Tool::Line if selected_paint_tile != 0 => {
+                                        cursor_icon = Some(egui::CursorIcon::Crosshair);
+                                        if let Some(start) = line_preview_start {
+                                            Self::draw_paint_line_preview(
+                                                &painter,
+                                                start,
+                                                (col, row),
+                                                origin,
+                                                half_w,
+                                                half_h,
+                                                paint_layer,
+                                                selected_paint_tile,
+                                                tile_atlas,
+                                                atlas_texture,
+                                                wall_atlas,
+                                                wall_texture,
+                                            );
+                                        } else {
+                                            Self::draw_paint_preview(
+                                                &painter,
+                                                col,
+                                                row,
+                                                origin,
+                                                half_w,
+                                                half_h,
+                                                paint_layer,
+                                                selected_paint_tile,
+                                                tile_atlas,
+                                                atlas_texture,
+                                                wall_atlas,
+                                                wall_texture,
+                                            );
+                                        }
+                                        if response.clicked_by(egui::PointerButton::Primary) {
+                                            result.line_clicked_tile = Some((col, row));
+                                            result.clicked_tile = Some((col, row));
+                                        }
+                                    }
+                                    Tool::Shape if selected_paint_tile != 0 => {
+                                        cursor_icon = Some(egui::CursorIcon::Crosshair);
+                                        if let Some(start) = shape_preview_start {
+                                            Self::draw_paint_shape_preview(
+                                                &painter,
+                                                map,
+                                                active_shape,
+                                                start,
+                                                (col, row),
+                                                origin,
+                                                half_w,
+                                                half_h,
+                                                paint_layer,
+                                                selected_paint_tile,
+                                                tile_atlas,
+                                                atlas_texture,
+                                                wall_atlas,
+                                                wall_texture,
+                                            );
+                                        } else {
+                                            Self::draw_paint_preview(
+                                                &painter,
+                                                col,
+                                                row,
+                                                origin,
+                                                half_w,
+                                                half_h,
+                                                paint_layer,
+                                                selected_paint_tile,
+                                                tile_atlas,
+                                                atlas_texture,
+                                                wall_atlas,
+                                                wall_texture,
+                                            );
+                                        }
+                                        if response.clicked_by(egui::PointerButton::Primary) {
+                                            result.shape_clicked_tile = Some((col, row));
+                                            result.clicked_tile = Some((col, row));
+                                        }
+                                    }
+                                    Tool::Fill if selected_paint_tile != 0 => {
+                                        cursor_icon = Some(egui::CursorIcon::Crosshair);
+                                        Self::draw_paint_preview(
+                                            &painter,
+                                            col,
+                                            row,
+                                            origin,
+                                            half_w,
+                                            half_h,
+                                            paint_layer,
+                                            selected_paint_tile,
                                             tile_atlas,
                                             atlas_texture,
                                             wall_atlas,
                                             wall_texture,
                                         );
                                         if response.clicked_by(egui::PointerButton::Primary) {
-                                            result.stamp_clicked_tile = Some((col, row));
+                                            result.fill_clicked_tile =
+                                                Some((col, row, selected_paint_tile));
                                             result.clicked_tile = Some((col, row));
                                         }
                                     }
-                                }
-                                Tool::Eyedropper => {
-                                    cursor_icon = Some(egui::CursorIcon::Crosshair);
-                                    let idx = row as usize * map.width as usize + col as usize;
-                                    let tile = &map.tiles[idx];
-                                    let shift_held = ui.input(|i| i.modifiers.shift);
-                                    let pick =
-                                        Self::eyedropper_target(tile, paint_layer, shift_held);
-
-                                    Self::draw_eyedropper_target_highlight(
-                                        &painter, col, row, origin, half_w, half_h, &pick, &colors,
-                                    );
-                                    match pick {
-                                        EyedropperPick::Ground(tile_id) if tile_id != 0 => {
-                                            Self::draw_ground_preview(
+                                    Tool::Stamp => {
+                                        if let Some(prefab) = stamp_prefab {
+                                            cursor_icon = Some(egui::CursorIcon::Crosshair);
+                                            Self::draw_prefab_preview(
                                                 &painter,
-                                                col,
-                                                row,
+                                                prefab,
+                                                (col, row),
                                                 origin,
                                                 half_w,
                                                 half_h,
                                                 tile_atlas,
                                                 atlas_texture,
-                                                tile_id,
-                                                180,
-                                            );
-                                        }
-                                        EyedropperPick::LeftWall(wall_id) if wall_id != 0 => {
-                                            Self::draw_wall_preview(
-                                                &painter,
-                                                col,
-                                                row,
-                                                origin,
-                                                half_w,
-                                                half_h,
                                                 wall_atlas,
                                                 wall_texture,
-                                                wall_id,
-                                                true,
-                                                180,
                                             );
+                                            if response.clicked_by(egui::PointerButton::Primary) {
+                                                result.stamp_clicked_tile = Some((col, row));
+                                                result.clicked_tile = Some((col, row));
+                                            }
                                         }
-                                        EyedropperPick::RightWall(wall_id) if wall_id != 0 => {
-                                            Self::draw_wall_preview(
-                                                &painter,
-                                                col,
-                                                row,
-                                                origin,
-                                                half_w,
-                                                half_h,
-                                                wall_atlas,
-                                                wall_texture,
-                                                wall_id,
-                                                false,
-                                                180,
-                                            );
+                                    }
+                                    Tool::Eyedropper => {
+                                        cursor_icon = Some(egui::CursorIcon::Crosshair);
+                                        let idx = row as usize * map.width as usize + col as usize;
+                                        let tile = &map.tiles[idx];
+                                        let shift_held = ui.input(|i| i.modifiers.shift);
+                                        let pick =
+                                            Self::eyedropper_target(tile, paint_layer, shift_held);
+
+                                        Self::draw_eyedropper_target_highlight(
+                                            &painter, col, row, origin, half_w, half_h, &pick,
+                                            &colors,
+                                        );
+                                        match pick {
+                                            EyedropperPick::Ground(tile_id) if tile_id != 0 => {
+                                                Self::draw_ground_preview(
+                                                    &painter,
+                                                    col,
+                                                    row,
+                                                    origin,
+                                                    half_w,
+                                                    half_h,
+                                                    tile_atlas,
+                                                    atlas_texture,
+                                                    tile_id,
+                                                    180,
+                                                );
+                                            }
+                                            EyedropperPick::LeftWall(wall_id) if wall_id != 0 => {
+                                                Self::draw_wall_preview(
+                                                    &painter,
+                                                    col,
+                                                    row,
+                                                    origin,
+                                                    half_w,
+                                                    half_h,
+                                                    wall_atlas,
+                                                    wall_texture,
+                                                    wall_id,
+                                                    true,
+                                                    180,
+                                                );
+                                            }
+                                            EyedropperPick::RightWall(wall_id) if wall_id != 0 => {
+                                                Self::draw_wall_preview(
+                                                    &painter,
+                                                    col,
+                                                    row,
+                                                    origin,
+                                                    half_w,
+                                                    half_h,
+                                                    wall_atlas,
+                                                    wall_texture,
+                                                    wall_id,
+                                                    false,
+                                                    180,
+                                                );
+                                            }
+                                            _ => {}
                                         }
-                                        _ => {}
-                                    }
 
-                                    if response.clicked_by(egui::PointerButton::Primary) {
-                                        result.eyedropper_pick = Some(pick);
-                                        result.clicked_tile = Some((col, row));
+                                        if response.clicked_by(egui::PointerButton::Primary) {
+                                            result.eyedropper_pick = Some(pick);
+                                            result.clicked_tile = Some((col, row));
+                                        }
+                                    }
+                                    Tool::Eraser if is_layer_visible(layers, paint_layer) => {
+                                        cursor_icon = Some(egui::CursorIcon::Crosshair);
+                                        Self::draw_erase_preview(
+                                            &painter, col, row, origin, half_w, half_h,
+                                        );
+                                        let is_primary_painting = response
+                                            .is_pointer_button_down_on()
+                                            && ui.input(|i| {
+                                                i.pointer.button_down(egui::PointerButton::Primary)
+                                            });
+                                        if is_primary_painting {
+                                            result.painted_tile = Some((col, row, 0));
+                                        }
+                                    }
+                                    _ => {
+                                        if response.clicked_by(egui::PointerButton::Primary) {
+                                            result.clicked_tile = Some((col, row));
+                                        }
                                     }
                                 }
-                                Tool::Eraser => {
-                                    cursor_icon = Some(egui::CursorIcon::Crosshair);
-                                    Self::draw_erase_preview(
-                                        &painter, col, row, origin, half_w, half_h,
-                                    );
-                                    let is_primary_painting = response.is_pointer_button_down_on()
-                                        && ui.input(|i| {
-                                            i.pointer.button_down(egui::PointerButton::Primary)
-                                        });
-                                    if is_primary_painting {
-                                        result.painted_tile = Some((col, row, 0));
-                                    }
-                                }
-                                _ => {
-                                    if response.clicked_by(egui::PointerButton::Primary) {
-                                        result.clicked_tile = Some((col, row));
-                                    }
-                                }
-                            }
-
-                            if active_tool == Tool::Stamp {
-                                if let Some(prefab) = stamp_prefab {
-                                    Self::draw_prefab_highlight(
-                                        &painter,
-                                        prefab,
-                                        (col, row),
-                                        origin,
-                                        half_w,
-                                        half_h,
-                                        &colors,
-                                    );
-                                } else {
-                                    Self::draw_tile_highlight(
-                                        &painter, col, row, origin, half_w, half_h, &colors,
-                                    );
-                                }
-                            } else {
-                                Self::draw_tile_highlight(
-                                    &painter, col, row, origin, half_w, half_h, &colors,
-                                );
                             }
                         }
                     }
+                }
+
+                let selection_context_tile_id = ui.id().with("selection_context_tile");
+                let selection_context_tile = ui
+                    .ctx()
+                    .data(|data| data.get_temp::<(u16, u16)>(selection_context_tile_id));
+                if paste_preview_active {
+                    ui.ctx().data_mut(|data| {
+                        data.remove::<(u16, u16)>(selection_context_tile_id);
+                    });
+                }
+
+                if let Some(preview) = selection_move_preview {
+                    Self::draw_selection_move_preview(
+                        &painter,
+                        preview.map,
+                        preview.top_left,
+                        &preview.layers,
+                        origin,
+                        half_w,
+                        half_h,
+                        tile_atlas,
+                        atlas_texture,
+                        wall_atlas,
+                        wall_texture,
+                    );
+                }
+
+                if let (Some(preview), Some((col, row))) = (
+                    paste_preview,
+                    result
+                        .hover_tile
+                        .or(selection_context_tile)
+                        .or(paste_preview_anchor),
+                ) {
+                    Self::draw_selection_move_preview(
+                        &painter,
+                        preview.map,
+                        (col, row),
+                        &preview.layers,
+                        origin,
+                        half_w,
+                        half_h,
+                        tile_atlas,
+                        atlas_texture,
+                        wall_atlas,
+                        wall_texture,
+                    );
+                    Self::draw_tile_selection_outline(
+                        &painter,
+                        TileSelection::from_top_left_size(
+                            (col, row),
+                            preview.map.width,
+                            preview.map.height,
+                        ),
+                        origin,
+                        half_w,
+                        half_h,
+                        &colors,
+                    );
+                } else if active_tool == Tool::Select {
+                    if let Some(selection) = selection_preview.or(current_selection) {
+                        Self::draw_tile_selection(
+                            &painter, selection, origin, half_w, half_h, &colors,
+                        );
+                    } else if let Some((col, row)) = result.hover_tile {
+                        Self::draw_tile_highlight(
+                            &painter, col, row, origin, half_w, half_h, &colors,
+                        );
+                    }
+                } else if let Some((col, row)) = result.hover_tile {
+                    if active_tool == Tool::Stamp {
+                        if let Some(prefab) = stamp_prefab {
+                            Self::draw_prefab_highlight(
+                                &painter,
+                                prefab,
+                                (col, row),
+                                origin,
+                                half_w,
+                                half_h,
+                                &colors,
+                            );
+                        } else {
+                            Self::draw_tile_highlight(
+                                &painter, col, row, origin, half_w, half_h, &colors,
+                            );
+                        }
+                    } else {
+                        Self::draw_tile_highlight(
+                            &painter, col, row, origin, half_w, half_h, &colors,
+                        );
+                    }
+                }
+
+                if !paste_preview_active
+                    && (active_tool == Tool::Select || selection_clipboard_available)
+                    && response.secondary_clicked()
+                {
+                    let context_tile = pointer_interact_pos.and_then(|pointer_pos| {
+                        if rect.contains(pointer_pos) && !overlay_rect.contains(pointer_pos) {
+                            Self::screen_to_tile(pointer_pos, origin, half_w, half_h, map)
+                        } else {
+                            None
+                        }
+                    });
+                    ui.ctx().data_mut(|data| {
+                        if let Some(tile) = context_tile {
+                            data.insert_temp(selection_context_tile_id, tile);
+                        } else {
+                            data.remove::<(u16, u16)>(selection_context_tile_id);
+                        }
+                    });
+                }
+                let selection_context_tile = ui
+                    .ctx()
+                    .data(|data| data.get_temp::<(u16, u16)>(selection_context_tile_id));
+                let show_selection_context_menu = !paste_preview_active
+                    && selection_context_tile.is_some()
+                    && (active_tool == Tool::Select || selection_clipboard_available);
+                if show_selection_context_menu {
+                    response.context_menu(|ui| {
+                        let Some(_) = selection_context_tile else {
+                            return;
+                        };
+
+                        ui.set_min_width(190.0);
+                        ui.add_space(2.0);
+
+                        if active_tool == Tool::Select && current_selection.is_some() {
+                            if Self::context_menu_action(
+                                ui,
+                                CONTEXT_ICON_CUT,
+                                "Cut",
+                                Some("Cmd+X"),
+                                None,
+                                true,
+                            )
+                                .clicked()
+                            {
+                                result.cut_selection_requested = true;
+                                ui.ctx().data_mut(|data| {
+                                    data.remove::<(u16, u16)>(selection_context_tile_id);
+                                });
+                                ui.close();
+                            }
+                            if Self::context_menu_action(
+                                ui,
+                                CONTEXT_ICON_COPY,
+                                "Copy",
+                                Some("Cmd+C"),
+                                None,
+                                true,
+                            )
+                                .clicked()
+                            {
+                                result.copy_selection_requested = true;
+                                ui.ctx().data_mut(|data| {
+                                    data.remove::<(u16, u16)>(selection_context_tile_id);
+                                });
+                                ui.close();
+                            }
+                        }
+
+                        if Self::context_menu_action(
+                            ui,
+                            CONTEXT_ICON_PASTE,
+                            "Paste",
+                            Some("Cmd+V"),
+                            None,
+                            selection_clipboard_available,
+                        )
+                        .clicked()
+                        {
+                            result.activate_paste_preview = true;
+                            ui.close();
+                        }
+
+                        if active_tool == Tool::Select && current_selection.is_some() {
+                            if Self::context_menu_action(
+                                ui,
+                                CONTEXT_ICON_CREATE_PREFAB,
+                                "Create Prefab...",
+                                None,
+                                None,
+                                true,
+                            )
+                                .clicked()
+                            {
+                                result.create_prefab_requested = true;
+                                ui.ctx().data_mut(|data| {
+                                    data.remove::<(u16, u16)>(selection_context_tile_id);
+                                });
+                                ui.close();
+                            }
+                            ui.separator();
+                            if Self::context_menu_action(
+                                ui,
+                                CONTEXT_ICON_DELETE,
+                                "Delete",
+                                Some("Backspace"),
+                                Some(colors.accent),
+                                true,
+                            )
+                            .clicked()
+                            {
+                                result.delete_selection_requested = true;
+                                ui.ctx().data_mut(|data| {
+                                    data.remove::<(u16, u16)>(selection_context_tile_id);
+                                });
+                                ui.close();
+                            }
+                        }
+                    });
                 }
 
                 if is_mouse_panning {
@@ -1068,6 +1389,28 @@ impl ViewportPanel {
         }
     }
 
+    fn screen_to_tile_clamped(
+        screen_pos: egui::Pos2,
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+        map: &map::Map,
+    ) -> Option<(u16, u16)> {
+        if map.width == 0 || map.height == 0 {
+            return None;
+        }
+
+        let dx = screen_pos.x - origin.x;
+        let dy = screen_pos.y - origin.y;
+
+        let col = ((dx / half_w + dy / half_h) / 2.0).floor() as i32;
+        let row = ((dy / half_h - dx / half_w) / 2.0).floor() as i32;
+        let max_col = i32::from(map.width.saturating_sub(1));
+        let max_row = i32::from(map.height.saturating_sub(1));
+
+        Some((col.clamp(0, max_col) as u16, row.clamp(0, max_row) as u16))
+    }
+
     fn draw_tile_highlight(
         painter: &egui::Painter,
         col: u16,
@@ -1091,6 +1434,204 @@ impl ViewportPanel {
         painter.line_segment([right, bottom], stroke);
         painter.line_segment([bottom, left], stroke);
         painter.line_segment([left, top], stroke);
+    }
+
+    fn draw_tile_selection(
+        painter: &egui::Painter,
+        selection: TileSelection,
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+        colors: &ThemeColors,
+    ) {
+        let (min_col, min_row, max_col, max_row) = selection.normalized_bounds();
+        let fill = colors.accent.gamma_multiply(0.14);
+        let stroke = egui::Stroke::new(1.5, colors.accent);
+
+        for row in min_row..=max_row {
+            for col in min_col..=max_col {
+                let (top, right, bottom, left) = Self::tile_diamond_points(
+                    i32::from(col),
+                    i32::from(row),
+                    origin,
+                    half_w,
+                    half_h,
+                );
+                painter.add(egui::Shape::convex_polygon(
+                    vec![top, right, bottom, left],
+                    fill,
+                    egui::Stroke::NONE,
+                ));
+            }
+        }
+
+        let (top, _, _, left_top) = Self::tile_diamond_points(
+            i32::from(min_col),
+            i32::from(min_row),
+            origin,
+            half_w,
+            half_h,
+        );
+        let (top_right, right_top, _, _) = Self::tile_diamond_points(
+            i32::from(max_col),
+            i32::from(min_row),
+            origin,
+            half_w,
+            half_h,
+        );
+        let (_, right_bottom, bottom, _) = Self::tile_diamond_points(
+            i32::from(max_col),
+            i32::from(max_row),
+            origin,
+            half_w,
+            half_h,
+        );
+        let (_, _, bottom_left, left_bottom) = Self::tile_diamond_points(
+            i32::from(min_col),
+            i32::from(max_row),
+            origin,
+            half_w,
+            half_h,
+        );
+
+        let mut outline = vec![
+            top,
+            top_right,
+            right_top,
+            right_bottom,
+            bottom,
+            bottom_left,
+            left_bottom,
+            left_top,
+        ];
+        outline.dedup_by(|a, b| a.distance_sq(*b) < 0.01);
+        painter.add(egui::Shape::closed_line(outline, stroke));
+    }
+
+    fn draw_tile_selection_outline(
+        painter: &egui::Painter,
+        selection: TileSelection,
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+        colors: &ThemeColors,
+    ) {
+        let (min_col, min_row, max_col, max_row) = selection.normalized_bounds();
+        let (top, _, _, left_top) = Self::tile_diamond_points(
+            i32::from(min_col),
+            i32::from(min_row),
+            origin,
+            half_w,
+            half_h,
+        );
+        let (top_right, right_top, _, _) = Self::tile_diamond_points(
+            i32::from(max_col),
+            i32::from(min_row),
+            origin,
+            half_w,
+            half_h,
+        );
+        let (_, right_bottom, bottom, _) = Self::tile_diamond_points(
+            i32::from(max_col),
+            i32::from(max_row),
+            origin,
+            half_w,
+            half_h,
+        );
+        let (_, _, bottom_left, left_bottom) = Self::tile_diamond_points(
+            i32::from(min_col),
+            i32::from(max_row),
+            origin,
+            half_w,
+            half_h,
+        );
+
+        let mut outline = vec![
+            top,
+            top_right,
+            right_top,
+            right_bottom,
+            bottom,
+            bottom_left,
+            left_bottom,
+            left_top,
+        ];
+        outline.dedup_by(|a, b| a.distance_sq(*b) < 0.01);
+
+        let stroke = egui::Stroke::new(1.5, colors.accent);
+        painter.add(egui::Shape::closed_line(outline, stroke));
+    }
+
+    fn context_menu_action(
+        ui: &mut egui::Ui,
+        icon: &str,
+        label: &str,
+        hotkey: Option<&str>,
+        color: Option<egui::Color32>,
+        enabled: bool,
+    ) -> egui::Response {
+        const MENU_LEFT_PADDING: f32 = 8.0;
+        const MENU_ICON_WIDTH: f32 = 18.0;
+        const MENU_MIN_WIDTH: f32 = 276.0;
+        const MENU_ICON_SIZE: f32 = 14.0;
+        const MENU_HOTKEY_FONT_SIZE: f32 = 12.0;
+
+        let colors = theme_colors();
+        let text_color = color.unwrap_or(colors.text);
+        let icon_color = if enabled { text_color } else { colors.muted };
+        let label_color = if enabled { text_color } else { colors.muted };
+        let hotkey_color = if enabled { colors.accent } else { colors.muted };
+        let row_height = ui.spacing().interact_size.y;
+        let (rect, response) = ui.allocate_exact_size(
+            egui::vec2(MENU_MIN_WIDTH, row_height),
+            if enabled {
+                egui::Sense::click()
+            } else {
+                egui::Sense::hover()
+            },
+        );
+
+        if response.hovered() {
+            ui.painter().rect_filled(
+                rect,
+                2.0,
+                ui.style().visuals.widgets.hovered.bg_fill,
+            );
+        }
+
+        let icon_x = rect.left() + MENU_LEFT_PADDING;
+        let icon_rect = egui::Rect::from_min_size(
+            egui::pos2(icon_x, rect.top()),
+            egui::vec2(MENU_ICON_WIDTH, row_height),
+        );
+        ui.painter().text(
+            egui::pos2(icon_rect.left(), icon_rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            icon,
+            icons::symbol_icon_font_id(MENU_ICON_SIZE),
+            icon_color,
+        );
+
+        let label_x = icon_rect.right() + 10.0;
+        ui.painter().text(
+            egui::pos2(label_x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::TextStyle::Button.resolve(ui.style()),
+            label_color,
+        );
+
+        if let Some(hotkey) = hotkey {
+            let hotkey_x = rect.left() + MENU_MIN_WIDTH - 8.0;
+            ui.painter().text(
+                egui::pos2(hotkey_x, rect.center().y),
+                egui::Align2::RIGHT_CENTER,
+                format!("[{hotkey}]"),
+                egui::FontId::new(MENU_HOTKEY_FONT_SIZE, egui::FontFamily::Monospace),
+                hotkey_color,
+            );
+        }
+        response
     }
 
     fn draw_prefab_highlight(
@@ -1171,6 +1712,42 @@ impl ViewportPanel {
             egui::pos2(cx + half_w, cy + half_h),
             egui::pos2(cx, cy + half_h * 2.0),
             egui::pos2(cx - half_w, cy + half_h),
+        )
+    }
+
+    fn selection_auto_pan_delta(
+        viewport_rect: egui::Rect,
+        pointer_pos: egui::Pos2,
+        dt: f32,
+    ) -> egui::Vec2 {
+        let left_zone = viewport_rect.left() + SELECTION_AUTO_PAN_MARGIN;
+        let right_zone = viewport_rect.right() - SELECTION_AUTO_PAN_MARGIN;
+        let top_zone = viewport_rect.top() + SELECTION_AUTO_PAN_MARGIN;
+        let bottom_zone = viewport_rect.bottom() - SELECTION_AUTO_PAN_MARGIN;
+
+        let x = if pointer_pos.x < left_zone {
+            -((left_zone - pointer_pos.x) / SELECTION_AUTO_PAN_MARGIN).clamp(0.0, 1.0)
+        } else if pointer_pos.x > right_zone {
+            ((pointer_pos.x - right_zone) / SELECTION_AUTO_PAN_MARGIN).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
+        let y = if pointer_pos.y < top_zone {
+            -((top_zone - pointer_pos.y) / SELECTION_AUTO_PAN_MARGIN).clamp(0.0, 1.0)
+        } else if pointer_pos.y > bottom_zone {
+            ((pointer_pos.y - bottom_zone) / SELECTION_AUTO_PAN_MARGIN).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
+        egui::vec2(x, y) * (SELECTION_AUTO_PAN_SPEED * dt)
+    }
+
+    fn clamp_point_to_rect(point: egui::Pos2, rect: egui::Rect) -> egui::Pos2 {
+        egui::pos2(
+            point.x.clamp(rect.left(), rect.right()),
+            point.y.clamp(rect.top(), rect.bottom()),
         )
     }
 
@@ -1412,7 +1989,7 @@ impl ViewportPanel {
                         140,
                     );
                 }
-                if tile.left_wall != 0 {
+                if is_rendered_wall(tile.left_wall) {
                     Self::draw_paint_preview_alpha(
                         painter,
                         dst_col,
@@ -1429,7 +2006,83 @@ impl ViewportPanel {
                         150,
                     );
                 }
-                if tile.right_wall != 0 {
+                if is_rendered_wall(tile.right_wall) {
+                    Self::draw_paint_preview_alpha(
+                        painter,
+                        dst_col,
+                        dst_row,
+                        origin,
+                        half_w,
+                        half_h,
+                        PaintLayer::RightWall,
+                        tile.right_wall,
+                        tile_atlas,
+                        tile_texture,
+                        wall_atlas,
+                        wall_texture,
+                        150,
+                    );
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_selection_move_preview(
+        painter: &egui::Painter,
+        selection_map: &map::Map,
+        top_left: (u16, u16),
+        layers: &LayerVisibility,
+        origin: egui::Pos2,
+        half_w: f32,
+        half_h: f32,
+        tile_atlas: Option<&render::TileAtlas>,
+        tile_texture: Option<&egui::TextureHandle>,
+        wall_atlas: Option<&render::SpriteAtlas>,
+        wall_texture: Option<&egui::TextureHandle>,
+    ) {
+        for src_row in 0..selection_map.height {
+            for src_col in 0..selection_map.width {
+                let idx = src_row as usize * selection_map.width as usize + src_col as usize;
+                let tile = selection_map.tiles[idx];
+                let dst_col = top_left.0 + src_col;
+                let dst_row = top_left.1 + src_row;
+
+                if layers.ground && tile.ground != 0 {
+                    Self::draw_paint_preview_alpha(
+                        painter,
+                        dst_col,
+                        dst_row,
+                        origin,
+                        half_w,
+                        half_h,
+                        PaintLayer::Ground,
+                        tile.ground,
+                        tile_atlas,
+                        tile_texture,
+                        wall_atlas,
+                        wall_texture,
+                        140,
+                    );
+                }
+                if layers.left_wall && is_rendered_wall(tile.left_wall) {
+                    Self::draw_paint_preview_alpha(
+                        painter,
+                        dst_col,
+                        dst_row,
+                        origin,
+                        half_w,
+                        half_h,
+                        PaintLayer::LeftWall,
+                        tile.left_wall,
+                        tile_atlas,
+                        tile_texture,
+                        wall_atlas,
+                        wall_texture,
+                        150,
+                    );
+                }
+                if layers.right_wall && is_rendered_wall(tile.right_wall) {
                     Self::draw_paint_preview_alpha(
                         painter,
                         dst_col,

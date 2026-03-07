@@ -4,7 +4,7 @@ use super::toolbar::Tool;
 use crate::document::PaintLayer;
 use crate::prefab::{OccupiedBounds, PrefabAsset};
 use crate::theme::{ThemeColors, theme_colors};
-use crate::widgets::tooltip;
+use crate::widgets::{icons, tooltip};
 
 const INSPECTOR_MIN_WIDTH: f32 = 260.0;
 const INSPECTOR_MAX_WIDTH: f32 = 760.0;
@@ -31,6 +31,9 @@ const PREFAB_PREVIEW_HEIGHT_ID: &str = "inspector_prefab_preview_height";
 const PREFAB_PREVIEW_HEADER_HEIGHT: f32 = 20.0;
 const PREFAB_PREVIEW_TOP_PAD: f32 = 4.0;
 const PREFAB_PREVIEW_BOTTOM_PAD: f32 = 44.0;
+const PREFAB_SECTION_ICON: &str = "\u{E5D8}";
+const TILE_PALETTE_SECTION_ICON: &str = "\u{E2A1}";
+const PREFAB_EDIT_ICON: &str = "\u{1F4DD}";
 
 #[derive(Default)]
 pub struct InspectorResponse {
@@ -214,7 +217,7 @@ impl InspectorPanel {
         );
 
         if prefab_mode {
-            Self::section_header(ui, colors, "Prefabs");
+            Self::section_header(ui, colors, "Prefabs", Some(PREFAB_SECTION_ICON));
             ui.add_space(8.0);
             let top_height = prefab_pane_layout
                 .map(|layout| layout.top_height)
@@ -237,7 +240,7 @@ impl InspectorPanel {
                 top_rect.height(),
             );
         } else {
-            Self::section_header(ui, colors, "Tile Palette");
+            Self::section_header(ui, colors, "Tile Palette", Some(TILE_PALETTE_SECTION_ICON));
             ui.add_space(8.0);
             Self::draw_tile_palette(
                 ui,
@@ -280,15 +283,18 @@ impl InspectorPanel {
                             .unwrap_or(false);
                         let edit_response = ui.add_enabled_ui(edit_enabled, |ui| {
                             ui.add_sized(
-                                egui::vec2(46.0, 18.0),
+                                egui::vec2(24.0, 18.0),
                                 egui::Button::new(
-                                    egui::RichText::new("Edit").size(12.0).color(colors.text),
+                                    egui::RichText::new(PREFAB_EDIT_ICON)
+                                        .font(icons::symbol_icon_font_id(13.0))
+                                        .color(colors.text),
                                 )
                                 .fill(egui::Color32::TRANSPARENT)
                                 .stroke(egui::Stroke::new(1.0, colors.border))
                                 .corner_radius(0.0),
                             )
                         });
+                        let _ = tooltip::attach(edit_response.response, "Edit Prefab");
                         if edit_response.inner.clicked() {
                             response.edit_prefab_index =
                                 selected_prefab_index.filter(|index| *index < prefabs.len());
@@ -962,13 +968,28 @@ impl InspectorPanel {
     }
 
     /// Section header: bold label.
-    fn section_header(ui: &mut egui::Ui, colors: &ThemeColors, label: &str) {
-        ui.label(
-            egui::RichText::new(label)
-                .size(14.0)
-                .strong()
-                .color(colors.text),
-        );
+    fn section_header(
+        ui: &mut egui::Ui,
+        colors: &ThemeColors,
+        label: &str,
+        icon: Option<&str>,
+    ) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if let Some(icon) = icon {
+                ui.label(
+                    egui::RichText::new(icon)
+                        .font(icons::symbol_icon_font_id(14.0))
+                        .color(colors.text),
+                );
+            }
+            ui.label(
+                egui::RichText::new(label)
+                    .size(14.0)
+                    .strong()
+                    .color(colors.text),
+            );
+        });
     }
 
     /// Draw a full-width horizontal border spanning edge to edge.
@@ -1307,12 +1328,7 @@ impl InspectorPanel {
 
                 let body_height = (list_height - PREFAB_LIST_HEADER_HEIGHT).max(1.0);
                 if prefabs.is_empty() {
-                    Self::draw_prefab_empty_state(
-                        ui,
-                        colors,
-                        body_height,
-                        "No prefabs loaded from prefabs/*.ron",
-                    );
+                    Self::draw_prefab_empty_state(ui, colors, body_height, "No prefabs available");
                     return;
                 }
 
@@ -1375,7 +1391,7 @@ impl InspectorPanel {
                                     ui.separator();
                                     if ui
                                         .button(
-                                            egui::RichText::new("Delete Prefab...")
+                                            egui::RichText::new("Delete Prefab")
                                                 .color(colors.accent),
                                         )
                                         .clicked()
@@ -1591,11 +1607,7 @@ impl InspectorPanel {
         selected_prefab_index: Option<usize>,
     ) {
         let Some(index) = selected_prefab_index.filter(|index| *index < prefabs.len()) else {
-            ui.label(
-                egui::RichText::new("Select a prefab to preview and place it.")
-                    .size(13.0)
-                    .color(colors.muted),
-            );
+            Self::draw_prefab_preview_empty(ui, colors, "No prefab selected");
             return;
         };
 
@@ -1621,15 +1633,6 @@ impl InspectorPanel {
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
     ) {
-        let Some(bounds) = prefab.occupied_bounds() else {
-            ui.label(
-                egui::RichText::new("Prefab is empty.")
-                    .size(13.0)
-                    .color(colors.muted),
-            );
-            return;
-        };
-
         let preview_size = egui::vec2(ui.available_width(), ui.available_height().max(1.0));
         let (rect, _) = ui.allocate_exact_size(preview_size, egui::Sense::hover());
         let painter = ui.painter_at(rect);
@@ -1642,6 +1645,17 @@ impl InspectorPanel {
             ],
             egui::Stroke::new(1.0, colors.border),
         );
+
+        let Some(bounds) = prefab.occupied_bounds() else {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Prefab is empty.",
+                egui::FontId::proportional(13.0),
+                colors.muted,
+            );
+            return;
+        };
 
         let Some(world_bounds) = Self::prefab_render_bounds(&prefab.map, bounds, wall_atlas) else {
             return;
@@ -1687,5 +1701,26 @@ impl InspectorPanel {
                 colors.muted,
             );
         }
+    }
+
+    fn draw_prefab_preview_empty(ui: &mut egui::Ui, colors: &ThemeColors, text: &str) {
+        let preview_size = egui::vec2(ui.available_width(), ui.available_height().max(1.0));
+        let (rect, _) = ui.allocate_exact_size(preview_size, egui::Sense::hover());
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 0.0, colors.panel_2.gamma_multiply(0.35));
+        painter.line_segment(
+            [
+                egui::pos2(rect.left(), rect.top()),
+                egui::pos2(rect.right(), rect.top()),
+            ],
+            egui::Stroke::new(1.0, colors.border),
+        );
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            text,
+            egui::FontId::proportional(13.0),
+            colors.muted,
+        );
     }
 }
