@@ -1391,7 +1391,7 @@ impl ViewportPanel {
         wall_atlas: Option<&render::SpriteAtlas>,
         wall_texture: Option<&egui::TextureHandle>,
     ) {
-        let points = shape::outline_points(shape_kind, start, end);
+        let points = shape::paint_points(shape_kind, start, end);
         for (x, y) in points {
             if x < 0 || y < 0 {
                 continue;

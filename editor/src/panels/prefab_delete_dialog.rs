@@ -30,11 +30,16 @@ impl PrefabDeleteDialog {
             return PrefabDeleteDialogAction::None;
         }
 
+        let viewport = ctx.viewport_rect();
+        let screen = ctx.content_rect();
+        if !viewport.is_finite() || !screen.is_finite() {
+            return PrefabDeleteDialogAction::None;
+        }
+
         let colors = theme_colors();
         let mut open = self.open;
         let mut action = PrefabDeleteDialogAction::None;
 
-        let screen = ctx.input(|i| i.viewport_rect());
         egui::Area::new(egui::Id::new("prefab_delete_backdrop"))
             .fixed_pos(screen.min)
             .show(ctx, |ui| {

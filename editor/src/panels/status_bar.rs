@@ -6,6 +6,7 @@ use crate::theme::{ThemeColors, theme_colors};
 use crate::widgets::tooltip;
 
 const STATUS_BAR_HEIGHT: f32 = 28.0;
+const STATUS_PROGRESS_BAR_SIZE: egui::Vec2 = egui::vec2(112.0, 10.0);
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum StatusBarAction {
@@ -38,6 +39,7 @@ impl StatusBarPanel {
         hover_tile: (u16, u16),
         zoom: f32,
         status_message: &str,
+        status_progress: Option<f32>,
     ) -> StatusBarAction {
         let colors = theme_colors();
         let mut action = StatusBarAction::None;
@@ -213,6 +215,11 @@ impl StatusBarPanel {
                                 .color(colors.muted),
                         );
 
+                        if let Some(progress) = status_progress {
+                            Self::separator(ui, &colors);
+                            Self::progress_bar(ui, progress, &colors);
+                        }
+
                         Self::separator(ui, &colors);
                     });
                 });
@@ -264,6 +271,33 @@ impl StatusBarPanel {
 
         let _ = tooltip::attach(response.clone(), tooltip);
         response.clicked()
+    }
+
+    fn progress_bar(ui: &mut egui::Ui, progress: f32, colors: &ThemeColors) {
+        let progress = progress.clamp(0.0, 1.0);
+        let (rect, response) =
+            ui.allocate_exact_size(STATUS_PROGRESS_BAR_SIZE, egui::Sense::hover());
+
+        ui.painter().rect(
+            rect,
+            4.0,
+            colors.bg_3,
+            egui::Stroke::new(1.0, colors.border),
+            egui::StrokeKind::Inside,
+        );
+
+        if progress > 0.0 {
+            let fill_rect = egui::Rect::from_min_max(
+                rect.min,
+                egui::pos2(rect.min.x + rect.width() * progress, rect.max.y),
+            );
+            ui.painter().rect_filled(fill_rect, 4.0, colors.accent);
+        }
+
+        let _ = tooltip::attach(
+            response,
+            format!("Asset progress {}%", (progress * 100.0).round() as i32),
+        );
     }
 
     fn separator(ui: &mut egui::Ui, colors: &ThemeColors) {

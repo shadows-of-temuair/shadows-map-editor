@@ -1,3 +1,4 @@
+mod asset_setup_dialog;
 mod export_dialog;
 mod inspector;
 mod map_size_dialog;
@@ -10,6 +11,7 @@ mod unsaved_changes_dialog;
 mod viewport;
 mod window_frame;
 
+pub use asset_setup_dialog::{AssetSetupDialog, AssetSetupDialogAction};
 pub use export_dialog::{ExportDialog, ExportDialogAction};
 pub use inspector::{InspectorPanel, InspectorResponse};
 pub use map_size_dialog::MapSizeDialog;

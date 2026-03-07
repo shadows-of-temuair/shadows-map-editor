@@ -19,7 +19,10 @@ impl WindowFrame {
     }
 
     fn handle_resize(ctx: &egui::Context) {
-        let rect = ctx.input(|i| i.viewport_rect());
+        let rect = ctx.viewport_rect();
+        if !rect.is_finite() {
+            return;
+        }
         let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) else {
             return;
         };
@@ -66,7 +69,10 @@ impl WindowFrame {
 
     fn draw_border(ctx: &egui::Context) {
         let colors = theme_colors();
-        let rect = ctx.input(|i| i.viewport_rect());
+        let rect = ctx.viewport_rect();
+        if !rect.is_finite() {
+            return;
+        }
         let painter = ctx.layer_painter(egui::LayerId::new(
             egui::Order::Foreground,
             egui::Id::new("window_border"),

@@ -1,4 +1,10 @@
-use std::{collections::VecDeque, fs, path::Path, path::PathBuf};
+use std::{
+    collections::VecDeque,
+    fs,
+    path::Path,
+    path::PathBuf,
+    sync::mpsc::{self, Receiver},
+};
 
 use eframe::egui;
 use tracing::{info, warn};
@@ -7,10 +13,10 @@ use crate::document::{DocumentKind, LayerVisibility, MapDocument, PaintLayer};
 use crate::map_list::{MapList, MapMetadataHint};
 use crate::palette_lookup::LoadedPaletteLookup;
 use crate::panels::{
-    ExportDialog, ExportDialogAction, EyedropperPick, InspectorPanel, InspectorResponse,
-    MapSizeDialog, PrefabDeleteDialog, PrefabDeleteDialogAction, StatusBarAction, StatusBarPanel,
-    TabBarAction, TabBarPanel, TitleBarPanel, Tool, ToolbarAction, ToolbarPanel,
-    UnsavedChangesDialog, UnsavedChangesDialogAction, ViewportPanel, WindowFrame,
+    AssetSetupDialog, AssetSetupDialogAction, ExportDialog, ExportDialogAction, EyedropperPick,
+    InspectorPanel, InspectorResponse, MapSizeDialog, PrefabDeleteDialog, PrefabDeleteDialogAction,
+    StatusBarAction, StatusBarPanel, TabBarAction, TabBarPanel, TitleBarPanel, Tool, ToolbarAction,
+    ToolbarPanel, UnsavedChangesDialog, UnsavedChangesDialogAction, ViewportPanel, WindowFrame,
 };
 use crate::prefab::{self, PrefabAsset};
 use crate::shape::{self, ShapeKind};
@@ -30,6 +36,58 @@ struct PendingPrefabDeletion {
     path: PathBuf,
     name: String,
 }
+
+struct LoadedAssets {
+    tile_atlas: Option<render::TileAtlas>,
+    wall_atlas: Option<render::SpriteAtlas>,
+    sotp_data: Option<Vec<u8>>,
+}
+
+enum AssetImportProgressEvent {
+    Progress {
+        copied: usize,
+        total: usize,
+        file_name: String,
+    },
+    Finished {
+        copied: usize,
+    },
+    Failed {
+        error: String,
+    },
+}
+
+struct AssetImportTask {
+    receiver: Receiver<AssetImportProgressEvent>,
+    copied: usize,
+    total: usize,
+    current_file: Option<String>,
+    just_started: bool,
+}
+
+enum AssetLoadProgressEvent {
+    Status {
+        message: String,
+        completed_steps: usize,
+        total_steps: usize,
+    },
+    Finished(LoadedAssets),
+    Failed(String),
+}
+
+struct AssetLoadTask {
+    receiver: Receiver<AssetLoadProgressEvent>,
+    completed_steps: usize,
+    total_steps: usize,
+}
+
+enum AtlasBuildResult {
+    Tile(Option<render::TileAtlas>),
+    Wall(Option<render::SpriteAtlas>),
+}
+
+const ASSET_LOAD_STAGE_COUNT: usize = 5;
+const ASSET_SETUP_PROMPT_STATUS: &str = "Assets not found, asking user to setup";
 
 pub struct EditorApp {
     documents: Vec<MapDocument>,
@@ -65,6 +123,9 @@ pub struct EditorApp {
     export_dialog: ExportDialog,
     new_map_size_dialog: MapSizeDialog,
     pending_new_document_kind: DocumentKind,
+    asset_setup_dialog: AssetSetupDialog,
+    asset_import_task: Option<AssetImportTask>,
+    asset_load_task: Option<AssetLoadTask>,
     unsaved_changes_dialog: UnsavedChangesDialog,
     pending_unsaved_changes: Option<PendingUnsavedChanges>,
     prefab_delete_dialog: PrefabDeleteDialog,
@@ -81,23 +142,11 @@ impl EditorApp {
         crate::widgets::icons::install_font(&cc.egui_ctx);
         theme::apply_theme(&cc.egui_ctx);
 
-        // Build atlases CPU-side; texture uploads are deferred to first frame
-        // because the renderer hasn't reported the real GPU max texture size yet.
-        let (tile_atlas, wall_atlas, sotp_data) = Self::load_assets();
+        let needs_asset_setup = Self::assets_dir_missing_or_empty();
         let map_list = MapList::load_if_exists("maps.ron");
         let prefab_assets = prefab::load_prefab_assets().unwrap_or_default();
         let selected_prefab = (!prefab_assets.is_empty()).then_some(0);
-        let selected_ground_tile = if tile_atlas.is_some() { 1 } else { 0 };
-        let selected_wall_tile = wall_atlas
-            .as_ref()
-            .and_then(|atlas| {
-                (1..atlas.sprite_count())
-                    .find(|&id| atlas.sprite_rect(id).is_some())
-                    .map(|id| id.min(u16::MAX as u32) as u16)
-            })
-            .unwrap_or(0);
-
-        Self {
+        let mut app = Self {
             documents: vec![MapDocument::new(50, 50)],
             active_tab: 0,
             active_tool: Tool::Pencil,
@@ -109,11 +158,11 @@ impl EditorApp {
             layer_visibility: LayerVisibility::default(),
             show_grid: true,
             show_collision_overlay: false,
-            atlas_needs_upload: tile_atlas.is_some(),
-            wall_atlas_needs_upload: wall_atlas.is_some(),
-            tile_atlas,
-            wall_atlas,
-            sotp_data,
+            atlas_needs_upload: false,
+            wall_atlas_needs_upload: false,
+            tile_atlas: None,
+            wall_atlas: None,
+            sotp_data: None,
             map_list,
             prefab_assets,
             selected_prefab,
@@ -123,8 +172,8 @@ impl EditorApp {
             tab_overlay_texture: None,
             hover_tile: (0, 0),
             selected_tile: None,
-            selected_ground_tile,
-            selected_wall_tile,
+            selected_ground_tile: 0,
+            selected_wall_tile: 0,
             reveal_ground_tile_in_palette: None,
             reveal_wall_tile_in_palette: None,
             last_pencil_click_tile: None,
@@ -133,14 +182,33 @@ impl EditorApp {
             export_dialog: ExportDialog::default(),
             new_map_size_dialog: MapSizeDialog::default(),
             pending_new_document_kind: DocumentKind::Map,
+            asset_setup_dialog: {
+                let mut dialog = AssetSetupDialog::default();
+                if needs_asset_setup {
+                    dialog.open();
+                }
+                dialog
+            },
+            asset_import_task: None,
+            asset_load_task: None,
             unsaved_changes_dialog: UnsavedChangesDialog::default(),
             pending_unsaved_changes: None,
             prefab_delete_dialog: PrefabDeleteDialog::default(),
             pending_prefab_deletion: None,
             allow_window_close: false,
-            status_message: String::from("Ready"),
+            status_message: if needs_asset_setup {
+                String::from(ASSET_SETUP_PROMPT_STATUS)
+            } else {
+                format!("Loading Dark Ages assets... 0/{ASSET_LOAD_STAGE_COUNT}")
+            },
             tab_overlay_texture_needs_upload: true,
+        };
+
+        if !needs_asset_setup {
+            app.start_asset_loading();
         }
+
+        app
     }
 
     fn clear_edit_anchors(&mut self) {
@@ -240,26 +308,55 @@ impl EditorApp {
         })
     }
 
-    /// Load all assets from the archive: tile atlas, wall sprite atlas, and SOTP collision data.
-    fn load_assets() -> (
-        Option<render::TileAtlas>,
-        Option<render::SpriteAtlas>,
-        Option<Vec<u8>>,
-    ) {
+    fn is_dat_file(path: &Path) -> bool {
+        path.is_file()
+            && path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("dat"))
+                .unwrap_or(false)
+    }
+
+    fn assets_dir_missing_or_empty() -> bool {
         let assets_dir = PathBuf::from("assets");
+        let Ok(entries) = fs::read_dir(assets_dir) else {
+            return true;
+        };
+
+        !entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .any(|path| Self::is_dat_file(&path))
+    }
+
+    /// Load all assets from the archive: tile atlas, wall sprite atlas, and SOTP collision data.
+    fn load_assets_with_progress<F>(mut progress: F) -> Result<LoadedAssets, String>
+    where
+        F: FnMut(String, usize, usize),
+    {
+        let assets_dir = PathBuf::from("assets");
+        progress(
+            "Loading assets: archives (1/5)".to_string(),
+            0,
+            ASSET_LOAD_STAGE_COUNT,
+        );
 
         let pool = match archive::AssetPool::load(&assets_dir) {
             Ok(pool) => pool,
             Err(e) => {
-                warn!(
+                return Err(format!(
                     "Could not load asset archives from {}: {}",
                     assets_dir.display(),
                     e
-                );
-                return (None, None, None);
+                ));
             }
         };
 
+        progress(
+            "Loading assets: palettes (2/5)".to_string(),
+            1,
+            ASSET_LOAD_STAGE_COUNT,
+        );
         let legacy_palette = match Self::get_pool_asset_case_insensitive(&pool, "legend.pal") {
             Some(data) => match render::Palette::from_bytes(data) {
                 Ok(p) => Some(p),
@@ -291,14 +388,96 @@ impl EditorApp {
             );
         }
 
-        // Ground tile atlas
-        let tile_atlas = match Self::get_pool_asset_case_insensitive(&pool, "TILEA.BMP") {
+        progress(
+            "Loading assets: tile and wall atlases (3/5)".to_string(),
+            2,
+            ASSET_LOAD_STAGE_COUNT,
+        );
+        let (tile_atlas, wall_atlas) = std::thread::scope(|scope| {
+            let pool = &pool;
+            let legacy_palette = legacy_palette.as_ref();
+            let ground_palette_lookup = ground_palette_lookup.as_ref();
+            let wall_palette_lookup = wall_palette_lookup.as_ref();
+            let (sender, receiver) = mpsc::channel();
+
+            let tile_sender = sender.clone();
+            scope.spawn(move || {
+                let atlas = Self::build_tile_atlas(pool, legacy_palette, ground_palette_lookup);
+                let _ = tile_sender.send(AtlasBuildResult::Tile(atlas));
+            });
+
+            scope.spawn(move || {
+                let atlas =
+                    Self::build_wall_sprite_atlas(pool, legacy_palette, wall_palette_lookup);
+                let _ = sender.send(AtlasBuildResult::Wall(atlas));
+            });
+
+            let mut tile_atlas = None;
+            let mut wall_atlas = None;
+            let mut tile_finished = false;
+            let mut wall_finished = false;
+
+            for _ in 0..2 {
+                match receiver.recv() {
+                    Ok(AtlasBuildResult::Tile(atlas)) => {
+                        tile_atlas = atlas;
+                        tile_finished = true;
+                        if !wall_finished {
+                            progress(
+                                "Loading assets: wall atlas (4/5)".to_string(),
+                                3,
+                                ASSET_LOAD_STAGE_COUNT,
+                            );
+                        }
+                    }
+                    Ok(AtlasBuildResult::Wall(atlas)) => {
+                        wall_atlas = atlas;
+                        wall_finished = true;
+                        if !tile_finished {
+                            progress(
+                                "Loading assets: tile atlas (4/5)".to_string(),
+                                3,
+                                ASSET_LOAD_STAGE_COUNT,
+                            );
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+
+            (tile_atlas, wall_atlas)
+        });
+
+        // SOTP collision data
+        progress(
+            "Loading assets: collision data (5/5)".to_string(),
+            4,
+            ASSET_LOAD_STAGE_COUNT,
+        );
+        let sotp_data = Self::get_pool_asset_case_insensitive(&pool, "SOTP.DAT").map(|data| {
+            info!("Loaded SOTP.DAT ({} bytes)", data.len());
+            data.to_vec()
+        });
+        if sotp_data.is_none() {
+            warn!("SOTP.DAT not found in asset archives");
+        }
+
+        Ok(LoadedAssets {
+            tile_atlas,
+            wall_atlas,
+            sotp_data,
+        })
+    }
+
+    fn build_tile_atlas(
+        pool: &archive::AssetPool,
+        legacy_palette: Option<&render::Palette>,
+        ground_palette_lookup: Option<&LoadedPaletteLookup>,
+    ) -> Option<render::TileAtlas> {
+        match Self::get_pool_asset_case_insensitive(pool, "TILEA.BMP") {
             Some(tile_data) => {
-                let atlas_result = if let Some(lookup) = ground_palette_lookup.as_ref() {
-                    match legacy_palette
-                        .as_ref()
-                        .or_else(|| lookup.fallback_palette())
-                    {
+                let atlas_result = if let Some(lookup) = ground_palette_lookup {
+                    match legacy_palette.or_else(|| lookup.fallback_palette()) {
                         Some(default_palette) => {
                             info!("Rendering TILEA.BMP using mpt palette-table mode");
                             Some(render::TileAtlas::from_raw_with_tile_palette(
@@ -317,7 +496,7 @@ impl EditorApp {
                             None
                         }
                     }
-                } else if let Some(palette) = legacy_palette.as_ref() {
+                } else if let Some(palette) = legacy_palette {
                     info!("Rendering TILEA.BMP using legacy legend palette");
                     Some(render::TileAtlas::from_raw(tile_data, palette, 56, 27))
                 } else {
@@ -336,8 +515,8 @@ impl EditorApp {
                         );
                         Some(atlas)
                     }
-                    Some(Err(e)) => {
-                        warn!("Failed to build tile atlas: {}", e);
+                    Some(Err(error)) => {
+                        warn!("Failed to build tile atlas: {}", error);
                         None
                     }
                     None => None,
@@ -347,17 +526,19 @@ impl EditorApp {
                 warn!("TILEA.BMP not found in asset archives");
                 None
             }
-        };
+        }
+    }
 
-        // Wall sprite atlas from HPF files
-        let wall_atlas = if let Some(lookup) = wall_palette_lookup.as_ref() {
-            match legacy_palette
-                .as_ref()
-                .or_else(|| lookup.fallback_palette())
-            {
+    fn build_wall_sprite_atlas(
+        pool: &archive::AssetPool,
+        legacy_palette: Option<&render::Palette>,
+        wall_palette_lookup: Option<&LoadedPaletteLookup>,
+    ) -> Option<render::SpriteAtlas> {
+        if let Some(lookup) = wall_palette_lookup {
+            match legacy_palette.or_else(|| lookup.fallback_palette()) {
                 Some(default_palette) => {
                     info!("Rendering STC wall sprites using stc palette-table mode");
-                    Self::load_wall_atlas(&pool, |wall_id| {
+                    Self::load_wall_atlas(pool, |wall_id| {
                         lookup
                             .palette_for_id(wall_id + 1)
                             .unwrap_or(default_palette)
@@ -368,24 +549,310 @@ impl EditorApp {
                     None
                 }
             }
-        } else if let Some(palette) = legacy_palette.as_ref() {
+        } else if let Some(palette) = legacy_palette {
             info!("Rendering STC wall sprites using legacy legend palette");
-            Self::load_wall_atlas(&pool, |_| palette)
+            Self::load_wall_atlas(pool, |_| palette)
         } else {
             warn!("No usable palette found for STC wall sprite rendering");
             None
-        };
+        }
+    }
 
-        // SOTP collision data
-        let sotp_data = Self::get_pool_asset_case_insensitive(&pool, "SOTP.DAT").map(|data| {
-            info!("Loaded SOTP.DAT ({} bytes)", data.len());
-            data.to_vec()
-        });
-        if sotp_data.is_none() {
-            warn!("SOTP.DAT not found in asset archives");
+    fn default_wall_tile_selection(wall_atlas: Option<&render::SpriteAtlas>) -> u16 {
+        wall_atlas
+            .and_then(|atlas| {
+                (1..atlas.sprite_count())
+                    .find(|&id| atlas.sprite_rect(id).is_some())
+                    .map(|id| id.min(u16::MAX as u32) as u16)
+            })
+            .unwrap_or(0)
+    }
+
+    fn apply_loaded_assets(&mut self, assets: LoadedAssets) {
+        self.atlas_needs_upload = assets.tile_atlas.is_some();
+        self.wall_atlas_needs_upload = assets.wall_atlas.is_some();
+        self.tile_atlas = assets.tile_atlas;
+        self.wall_atlas = assets.wall_atlas;
+        self.sotp_data = assets.sotp_data;
+        self.atlas_texture = None;
+        self.wall_texture = None;
+
+        if self.selected_ground_tile == 0 && self.tile_atlas.is_some() {
+            self.selected_ground_tile = 1;
+        }
+        if self.selected_wall_tile == 0 {
+            self.selected_wall_tile = Self::default_wall_tile_selection(self.wall_atlas.as_ref());
+        }
+        if self.sotp_data.is_none() {
+            self.show_collision_overlay = false;
+        }
+    }
+
+    fn start_asset_loading(&mut self) {
+        if self.asset_load_task.is_some() {
+            return;
         }
 
-        (tile_atlas, wall_atlas, sotp_data)
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let send_progress = |message: String, completed_steps: usize, total_steps: usize| {
+                let _ = sender.send(AssetLoadProgressEvent::Status {
+                    message,
+                    completed_steps,
+                    total_steps,
+                });
+            };
+
+            match Self::load_assets_with_progress(send_progress) {
+                Ok(assets) => {
+                    let _ = sender.send(AssetLoadProgressEvent::Finished(assets));
+                }
+                Err(error) => {
+                    let _ = sender.send(AssetLoadProgressEvent::Failed(error));
+                }
+            }
+        });
+
+        self.asset_load_task = Some(AssetLoadTask {
+            receiver,
+            completed_steps: 0,
+            total_steps: ASSET_LOAD_STAGE_COUNT,
+        });
+    }
+
+    fn open_asset_setup_prompt(&mut self) {
+        self.asset_setup_dialog.open();
+        self.status_message = String::from(ASSET_SETUP_PROMPT_STATUS);
+    }
+
+    fn poll_asset_load_progress(&mut self, ctx: &egui::Context) {
+        let mut completion = None;
+
+        if let Some(task) = self.asset_load_task.as_mut() {
+            while let Ok(event) = task.receiver.try_recv() {
+                match event {
+                    AssetLoadProgressEvent::Status {
+                        message,
+                        completed_steps,
+                        total_steps,
+                    } => {
+                        task.completed_steps = completed_steps;
+                        task.total_steps = total_steps;
+                        self.status_message = message;
+                    }
+                    AssetLoadProgressEvent::Finished(assets) => {
+                        completion = Some(Ok(assets));
+                    }
+                    AssetLoadProgressEvent::Failed(error) => {
+                        completion = Some(Err(error));
+                    }
+                }
+            }
+            ctx.request_repaint();
+        }
+
+        let Some(result) = completion else {
+            return;
+        };
+
+        self.asset_load_task = None;
+        match result {
+            Ok(assets) => {
+                let has_any_assets = assets.tile_atlas.is_some()
+                    || assets.wall_atlas.is_some()
+                    || assets.sotp_data.is_some();
+                self.apply_loaded_assets(assets);
+                if has_any_assets {
+                    self.status_message = String::from("Assets loaded.");
+                } else {
+                    self.open_asset_setup_prompt();
+                }
+            }
+            Err(error) => {
+                warn!("Asset load failed: {}", error);
+                self.open_asset_setup_prompt();
+            }
+        }
+    }
+
+    fn start_dark_ages_asset_import(&mut self, source_dir: &Path) -> Result<(), String> {
+        let entries = fs::read_dir(source_dir).map_err(|error| {
+            format!(
+                "Could not read Dark Ages folder {}: {}",
+                source_dir.display(),
+                error
+            )
+        })?;
+
+        let assets_dir = PathBuf::from("assets");
+        fs::create_dir_all(&assets_dir)
+            .map_err(|error| format!("Could not create {}: {}", assets_dir.display(), error))?;
+
+        let mut jobs = Vec::new();
+        for entry in entries.filter_map(Result::ok) {
+            let source_path = entry.path();
+            if !Self::is_dat_file(&source_path) {
+                continue;
+            }
+
+            let Some(file_name) = source_path.file_name().map(|name| name.to_os_string()) else {
+                continue;
+            };
+            jobs.push((source_path, assets_dir.join(file_name)));
+        }
+
+        if jobs.is_empty() {
+            return Err(format!(
+                "No .dat files were found in {}. Select the Dark Ages install folder that contains the game archives.",
+                source_dir.display()
+            ));
+        }
+
+        let total = jobs.len();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut copied = 0usize;
+            for (source_path, destination) in jobs {
+                let file_name = source_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("archive.dat")
+                    .to_string();
+
+                let copy_result = if Self::paths_match(&source_path, &destination) {
+                    Ok(0)
+                } else {
+                    fs::copy(&source_path, &destination)
+                };
+
+                if let Err(error) = copy_result {
+                    let _ = sender.send(AssetImportProgressEvent::Failed {
+                        error: format!(
+                            "Failed to copy {} into {}: {}",
+                            source_path.display(),
+                            destination.display(),
+                            error
+                        ),
+                    });
+                    return;
+                }
+
+                copied += 1;
+                let _ = sender.send(AssetImportProgressEvent::Progress {
+                    copied,
+                    total,
+                    file_name,
+                });
+            }
+
+            let _ = sender.send(AssetImportProgressEvent::Finished { copied });
+        });
+
+        self.asset_import_task = Some(AssetImportTask {
+            receiver,
+            copied: 0,
+            total,
+            current_file: None,
+            just_started: true,
+        });
+        self.status_message = String::from("Importing Dark Ages assets...");
+        Ok(())
+    }
+
+    fn poll_asset_import_progress(&mut self, ctx: &egui::Context) {
+        let mut completion = None;
+
+        if let Some(task) = self.asset_import_task.as_mut() {
+            if task.just_started {
+                task.just_started = false;
+                ctx.request_repaint();
+                return;
+            }
+
+            while let Ok(event) = task.receiver.try_recv() {
+                match event {
+                    AssetImportProgressEvent::Progress {
+                        copied,
+                        total,
+                        file_name,
+                    } => {
+                        task.copied = copied;
+                        task.total = total;
+                        task.current_file = Some(file_name);
+                        self.status_message =
+                            format!("Importing Dark Ages assets... {copied}/{total}");
+                    }
+                    AssetImportProgressEvent::Finished { copied } => {
+                        completion = Some(Ok(copied));
+                    }
+                    AssetImportProgressEvent::Failed { error } => {
+                        completion = Some(Err(error));
+                    }
+                }
+            }
+            ctx.request_repaint();
+        }
+
+        let Some(result) = completion else {
+            return;
+        };
+
+        self.asset_import_task = None;
+        match result {
+            Ok(copied) => {
+                self.status_message = format!(
+                    "Imported {} Dark Ages .dat files. Loading assets...",
+                    copied
+                );
+                self.start_asset_loading();
+            }
+            Err(error) => {
+                warn!("Asset import failed: {}", error);
+                self.open_asset_setup_prompt();
+            }
+        }
+    }
+
+    fn resolve_asset_setup_action(&mut self, action: AssetSetupDialogAction) {
+        match action {
+            AssetSetupDialogAction::None => {}
+            AssetSetupDialogAction::NotNow => {
+                self.status_message = String::from(
+                    "Dark Ages assets are missing. Copy the game's .dat files into assets/ to render tiles, walls, and collision data.",
+                );
+            }
+            AssetSetupDialogAction::SelectFolder => {
+                let folder = rfd::FileDialog::new()
+                    .set_title("Select Dark Ages Folder")
+                    .pick_folder();
+
+                let Some(folder) = folder else {
+                    self.open_asset_setup_prompt();
+                    return;
+                };
+
+                self.asset_setup_dialog.close();
+                match self.start_dark_ages_asset_import(&folder) {
+                    Ok(()) => {}
+                    Err(error) => {
+                        warn!("Asset import failed: {}", error);
+                        self.open_asset_setup_prompt();
+                    }
+                }
+            }
+        }
+    }
+
+    fn status_progress(&self) -> Option<f32> {
+        if let Some(task) = self.asset_import_task.as_ref() {
+            let total = task.total.max(1);
+            return Some((task.copied as f32 / total as f32).clamp(0.0, 1.0));
+        }
+
+        self.asset_load_task.as_ref().map(|task| {
+            let total = task.total_steps.max(1);
+            (task.completed_steps as f32 / total as f32).clamp(0.0, 1.0)
+        })
     }
 
     /// Probe for `stcNNNNN.hpf` files in the asset pool, decode them, and
@@ -1107,7 +1574,7 @@ impl EditorApp {
             return;
         }
 
-        let points = shape::outline_points(shape_kind, start, end);
+        let points = shape::paint_points(shape_kind, start, end);
         doc.begin_layer_stroke(layer, paint_value);
         for (x, y) in points {
             if x < 0 || y < 0 {
@@ -1427,6 +1894,9 @@ impl eframe::App for EditorApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.poll_asset_import_progress(ctx);
+        self.poll_asset_load_progress(ctx);
+
         // Deferred atlas uploads
         self.try_upload_atlas(ctx);
         self.try_upload_wall_atlas(ctx);
@@ -1445,7 +1915,11 @@ impl eframe::App for EditorApp {
 
         WindowFrame::show(ctx);
 
-        if !self.unsaved_changes_dialog.is_open() && !self.prefab_delete_dialog.is_open() {
+        if !self.unsaved_changes_dialog.is_open()
+            && !self.prefab_delete_dialog.is_open()
+            && !self.asset_setup_dialog.is_open()
+            && self.asset_import_task.is_none()
+        {
             self.handle_keyboard_shortcuts(ctx);
             self.handle_dropped_files(ctx);
         }
@@ -1492,6 +1966,7 @@ impl eframe::App for EditorApp {
             self.hover_tile,
             current_zoom,
             &self.status_message,
+            self.status_progress(),
         );
         match status_action {
             StatusBarAction::ZoomIn => {
@@ -1557,6 +2032,9 @@ impl eframe::App for EditorApp {
         ) {
             self.create_document_with_dimensions(width, height);
         }
+
+        let asset_setup_action = self.asset_setup_dialog.show(ctx);
+        self.resolve_asset_setup_action(asset_setup_action);
 
         let prefab_delete_action = self.prefab_delete_dialog.show(ctx);
         self.resolve_prefab_delete_action(prefab_delete_action);

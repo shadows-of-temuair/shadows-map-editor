@@ -112,6 +112,14 @@ pub fn draw_icon_rectangle(painter: &egui::Painter, rect: egui::Rect, color: egu
     painter.rect_stroke(inner, 0.0, stroke, egui::StrokeKind::Inside);
 }
 
+/// Draw a filled rectangle (Solid Rectangle tool).
+pub fn draw_icon_rectangle_solid(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    let s = rect.width().min(rect.height()) * 0.34;
+    let inner = egui::Rect::from_center_size(c, egui::vec2(s * 2.0, s * 1.6));
+    painter.rect_filled(inner, 0.0, color);
+}
+
 /// Draw a composite shapes icon (Shape tool).
 pub fn draw_icon_shapes(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let center = rect.center();
@@ -145,11 +153,26 @@ pub fn draw_icon_square(painter: &egui::Painter, rect: egui::Rect, color: egui::
     painter.rect_stroke(inner, 0.0, stroke, egui::StrokeKind::Inside);
 }
 
+/// Draw a filled square (Solid Square tool).
+pub fn draw_icon_square_solid(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    let s = rect.width().min(rect.height()) * 0.32;
+    let inner = egui::Rect::from_center_size(c, egui::vec2(s * 2.0, s * 2.0));
+    painter.rect_filled(inner, 0.0, color);
+}
+
 /// Draw a circle outline (Circle shape tool).
 pub fn draw_icon_circle(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let c = rect.center();
     let r = rect.width().min(rect.height()) * 0.32;
     painter.circle_stroke(c, r, egui::Stroke::new(1.5, color));
+}
+
+/// Draw a filled circle (Solid Circle tool).
+pub fn draw_icon_circle_solid(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    let r = rect.width().min(rect.height()) * 0.32;
+    painter.circle_filled(c, r, color);
 }
 
 /// Draw an upright triangle outline (Triangle shape tool).
@@ -163,6 +186,20 @@ pub fn draw_icon_triangle(painter: &egui::Painter, rect: egui::Rect, color: egui
     painter.line_segment([top, left], stroke);
     painter.line_segment([left, right], stroke);
     painter.line_segment([right, top], stroke);
+}
+
+/// Draw a filled upright triangle (Solid Triangle tool).
+pub fn draw_icon_triangle_solid(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    let s = rect.width().min(rect.height()) * 0.38;
+    let top = egui::pos2(c.x, c.y - s * 0.85);
+    let left = egui::pos2(c.x - s, c.y + s * 0.75);
+    let right = egui::pos2(c.x + s, c.y + s * 0.75);
+    painter.add(egui::Shape::convex_polygon(
+        vec![top, left, right],
+        color,
+        egui::Stroke::NONE,
+    ));
 }
 
 /// Draw a simple diagonal segment with endpoints (Line tool).
