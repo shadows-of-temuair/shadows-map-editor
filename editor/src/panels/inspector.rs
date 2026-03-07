@@ -29,6 +29,8 @@ const PREFAB_PREVIEW_MIN_HEIGHT: f32 = 110.0;
 const PREFAB_SPLITTER_HEIGHT: f32 = 10.0;
 const PREFAB_PREVIEW_HEIGHT_ID: &str = "inspector_prefab_preview_height";
 const PREFAB_PREVIEW_HEADER_HEIGHT: f32 = 20.0;
+const PREFAB_PREVIEW_TOP_PAD: f32 = 4.0;
+const PREFAB_PREVIEW_BOTTOM_PAD: f32 = 44.0;
 
 #[derive(Default)]
 pub struct InspectorResponse {
@@ -36,6 +38,7 @@ pub struct InspectorResponse {
     pub import_prefab_requested: bool,
     pub select_prefab_index: Option<usize>,
     pub edit_prefab_index: Option<usize>,
+    pub delete_prefab_index: Option<usize>,
 }
 
 pub struct InspectorPanel;
@@ -1304,6 +1307,17 @@ impl InspectorPanel {
                             if row_response.double_clicked() {
                                 response.edit_prefab_index = Some(index);
                             }
+                            if row_response.secondary_clicked() {
+                                response.select_prefab_index = Some(index);
+                            }
+                            row_response.context_menu(|ui| {
+                                ui.set_min_width(140.0);
+                                if ui.button("Delete Prefab...").clicked() {
+                                    response.select_prefab_index = Some(index);
+                                    response.delete_prefab_index = Some(index);
+                                    ui.close();
+                                }
+                            });
                         }
                     });
             });
@@ -1519,16 +1533,23 @@ impl InspectorPanel {
             return;
         };
 
-        let bottom_pad = 28.0;
-        let fit_w = rect.width().max(1.0);
-        let fit_h = (rect.height() - bottom_pad).max(1.0);
+        let fit_rect = egui::Rect::from_min_max(
+            egui::pos2(rect.left(), rect.top() + PREFAB_PREVIEW_TOP_PAD),
+            egui::pos2(
+                rect.right(),
+                (rect.bottom() - PREFAB_PREVIEW_BOTTOM_PAD)
+                    .max(rect.top() + PREFAB_PREVIEW_TOP_PAD + 1.0),
+            ),
+        );
+        let fit_w = fit_rect.width().max(1.0);
+        let fit_h = fit_rect.height().max(1.0);
         let scale_x = fit_w / world_bounds.width();
         let scale_y = fit_h / world_bounds.height();
         let scale = scale_x.min(scale_y).clamp(0.15, 8.0);
 
         let offset = egui::vec2(
-            rect.center().x - (world_bounds.min.x + world_bounds.max.x) * 0.5 * scale,
-            rect.bottom() - bottom_pad - world_bounds.max.y * scale,
+            fit_rect.center().x - (world_bounds.min.x + world_bounds.max.x) * 0.5 * scale,
+            fit_rect.center().y - (world_bounds.min.y + world_bounds.max.y) * 0.5 * scale,
         );
 
         Self::draw_prefab_render_scene(

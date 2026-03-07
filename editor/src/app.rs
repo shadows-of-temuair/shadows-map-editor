@@ -8,9 +8,9 @@ use crate::map_list::{MapList, MapMetadataHint};
 use crate::palette_lookup::LoadedPaletteLookup;
 use crate::panels::{
     ExportDialog, ExportDialogAction, EyedropperPick, InspectorPanel, InspectorResponse,
-    MapSizeDialog, StatusBarAction, StatusBarPanel, TabBarAction, TabBarPanel, TitleBarPanel, Tool,
-    ToolbarAction, ToolbarPanel, UnsavedChangesDialog, UnsavedChangesDialogAction, ViewportPanel,
-    WindowFrame,
+    MapSizeDialog, PrefabDeleteDialog, PrefabDeleteDialogAction, StatusBarAction, StatusBarPanel,
+    TabBarAction, TabBarPanel, TitleBarPanel, Tool, ToolbarAction, ToolbarPanel,
+    UnsavedChangesDialog, UnsavedChangesDialogAction, ViewportPanel, WindowFrame,
 };
 use crate::prefab::{self, PrefabAsset};
 use crate::shape::{self, ShapeKind};
@@ -24,6 +24,11 @@ enum PendingDiscardAction {
 struct PendingUnsavedChanges {
     document_index: usize,
     action: PendingDiscardAction,
+}
+
+struct PendingPrefabDeletion {
+    path: PathBuf,
+    name: String,
 }
 
 pub struct EditorApp {
@@ -62,6 +67,8 @@ pub struct EditorApp {
     pending_new_document_kind: DocumentKind,
     unsaved_changes_dialog: UnsavedChangesDialog,
     pending_unsaved_changes: Option<PendingUnsavedChanges>,
+    prefab_delete_dialog: PrefabDeleteDialog,
+    pending_prefab_deletion: Option<PendingPrefabDeletion>,
     allow_window_close: bool,
     status_message: String,
     atlas_needs_upload: bool,
@@ -128,6 +135,8 @@ impl EditorApp {
             pending_new_document_kind: DocumentKind::Map,
             unsaved_changes_dialog: UnsavedChangesDialog::default(),
             pending_unsaved_changes: None,
+            prefab_delete_dialog: PrefabDeleteDialog::default(),
+            pending_prefab_deletion: None,
             allow_window_close: false,
             status_message: String::from("Ready"),
             tab_overlay_texture_needs_upload: true,
@@ -716,6 +725,75 @@ impl EditorApp {
                 self.open_document_from_path(prefab.path.clone());
             }
         }
+        if let Some(index) = response
+            .delete_prefab_index
+            .filter(|index| *index < self.prefab_assets.len())
+        {
+            self.begin_prefab_delete_flow(index);
+        }
+    }
+
+    fn begin_prefab_delete_flow(&mut self, index: usize) {
+        let Some(prefab) = self.prefab_assets.get(index) else {
+            return;
+        };
+
+        let name = prefab.file_stem_name().to_string();
+        self.prefab_delete_dialog.open_for(&name);
+        self.pending_prefab_deletion = Some(PendingPrefabDeletion {
+            path: prefab.path.clone(),
+            name,
+        });
+    }
+
+    fn resolve_prefab_delete_action(&mut self, action: PrefabDeleteDialogAction) {
+        match action {
+            PrefabDeleteDialogAction::None => {}
+            PrefabDeleteDialogAction::Cancel => {
+                self.pending_prefab_deletion = None;
+            }
+            PrefabDeleteDialogAction::Delete => {
+                let Some(pending) = self.pending_prefab_deletion.take() else {
+                    return;
+                };
+                match self.delete_prefab(&pending.path, &pending.name) {
+                    Ok(()) => {
+                        self.status_message = format!("Deleted prefab {}.", pending.name);
+                    }
+                    Err(error) => {
+                        self.status_message = error;
+                    }
+                }
+            }
+        }
+    }
+
+    fn delete_prefab(&mut self, path: &Path, name: &str) -> Result<(), String> {
+        let mut open_indices = Vec::new();
+        for (index, doc) in self.documents.iter().enumerate() {
+            let Some(doc_path) = doc.path.as_ref() else {
+                continue;
+            };
+            if !Self::paths_match(doc_path, path) {
+                continue;
+            }
+            if doc.dirty {
+                return Err(format!(
+                    "Close or save open prefab tabs for {} before deleting it.",
+                    name
+                ));
+            }
+            open_indices.push(index);
+        }
+
+        for index in open_indices.into_iter().rev() {
+            self.close_tab_now(index);
+        }
+
+        fs::remove_file(path)
+            .map_err(|error| format!("Delete failed for {}: {}", path.display(), error))?;
+        self.reload_prefabs();
+        Ok(())
     }
 
     fn save_document_at(&mut self, index: usize, prompt_for_path: bool) -> bool {
@@ -1367,7 +1445,7 @@ impl eframe::App for EditorApp {
 
         WindowFrame::show(ctx);
 
-        if !self.unsaved_changes_dialog.is_open() {
+        if !self.unsaved_changes_dialog.is_open() && !self.prefab_delete_dialog.is_open() {
             self.handle_keyboard_shortcuts(ctx);
             self.handle_dropped_files(ctx);
         }
@@ -1479,6 +1557,9 @@ impl eframe::App for EditorApp {
         ) {
             self.create_document_with_dimensions(width, height);
         }
+
+        let prefab_delete_action = self.prefab_delete_dialog.show(ctx);
+        self.resolve_prefab_delete_action(prefab_delete_action);
 
         // Export dialog
         {
