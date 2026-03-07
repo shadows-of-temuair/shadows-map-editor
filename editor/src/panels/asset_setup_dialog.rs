@@ -1,6 +1,9 @@
 use eframe::egui;
 
 use crate::theme::theme_colors;
+use crate::widgets::icons;
+
+const ASSET_SETUP_ICON: &str = "\u{EB02}";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AssetSetupDialogAction {
@@ -43,6 +46,7 @@ impl AssetSetupDialog {
         let mut action = AssetSetupDialogAction::None;
 
         egui::Area::new(egui::Id::new("asset_setup_backdrop"))
+            .order(egui::Order::Middle)
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
                 let _ = ui.allocate_response(screen.size(), egui::Sense::click());
@@ -54,6 +58,7 @@ impl AssetSetupDialog {
             });
 
         egui::Window::new("")
+            .order(egui::Order::Foreground)
             .id(egui::Id::new("asset_setup_dialog"))
             .title_bar(false)
             .collapsible(false)
@@ -71,12 +76,7 @@ impl AssetSetupDialog {
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 
-                ui.label(
-                    egui::RichText::new("Asset Setup")
-                        .size(18.0)
-                        .strong()
-                        .color(colors.text),
-                );
+                draw_modal_title(ui, &colors, ASSET_SETUP_ICON, "Asset Setup");
                 ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new(
@@ -111,6 +111,19 @@ impl AssetSetupDialog {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
 
+                        let not_now_btn = ui.add(
+                            egui::Button::new(
+                                egui::RichText::new("Not Now").size(14.0).color(colors.text),
+                            )
+                            .fill(colors.bg_3)
+                            .stroke(egui::Stroke::new(1.0, colors.border))
+                            .corner_radius(4.0)
+                            .min_size(egui::vec2(92.0, 32.0)),
+                        );
+                        if not_now_btn.clicked() {
+                            action = AssetSetupDialogAction::NotNow;
+                        }
+
                         let select_btn = ui.add(
                             egui::Button::new(
                                 egui::RichText::new("Select Dark Ages Folder")
@@ -125,19 +138,6 @@ impl AssetSetupDialog {
                         if select_btn.clicked() || submit {
                             action = AssetSetupDialogAction::SelectFolder;
                         }
-
-                        let not_now_btn = ui.add(
-                            egui::Button::new(
-                                egui::RichText::new("Not Now").size(14.0).color(colors.text),
-                            )
-                            .fill(colors.bg_3)
-                            .stroke(egui::Stroke::new(1.0, colors.border))
-                            .corner_radius(4.0)
-                            .min_size(egui::vec2(92.0, 32.0)),
-                        );
-                        if not_now_btn.clicked() {
-                            action = AssetSetupDialogAction::NotNow;
-                        }
                     });
                 });
             });
@@ -148,4 +148,26 @@ impl AssetSetupDialog {
         self.open = open;
         action
     }
+}
+
+fn draw_modal_title(
+    ui: &mut egui::Ui,
+    colors: &crate::theme::ThemeColors,
+    icon: &str,
+    title: &str,
+) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        ui.label(
+            egui::RichText::new(icon)
+                .font(icons::symbol_icon_font_id(18.0))
+                .color(colors.text),
+        );
+        ui.label(
+            egui::RichText::new(title)
+                .size(18.0)
+                .strong()
+                .color(colors.text),
+        );
+    });
 }

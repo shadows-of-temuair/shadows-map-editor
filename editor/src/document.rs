@@ -43,6 +43,53 @@ impl DocumentKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TileSelection {
+    pub start_col: u16,
+    pub start_row: u16,
+    pub end_col: u16,
+    pub end_row: u16,
+}
+
+impl TileSelection {
+    pub fn from_points(start: (u16, u16), end: (u16, u16)) -> Self {
+        Self {
+            start_col: start.0,
+            start_row: start.1,
+            end_col: end.0,
+            end_row: end.1,
+        }
+    }
+
+    pub fn normalized_bounds(self) -> (u16, u16, u16, u16) {
+        (
+            self.start_col.min(self.end_col),
+            self.start_row.min(self.end_row),
+            self.start_col.max(self.end_col),
+            self.start_row.max(self.end_row),
+        )
+    }
+
+    pub fn dimensions(self) -> (u16, u16) {
+        let (min_col, min_row, max_col, max_row) = self.normalized_bounds();
+        (max_col - min_col + 1, max_row - min_row + 1)
+    }
+
+    pub fn contains(self, tile: (u16, u16)) -> bool {
+        let (min_col, min_row, max_col, max_row) = self.normalized_bounds();
+        tile.0 >= min_col && tile.0 <= max_col && tile.1 >= min_row && tile.1 <= max_row
+    }
+
+    pub fn from_top_left_size(top_left: (u16, u16), width: u16, height: u16) -> Self {
+        Self {
+            start_col: top_left.0,
+            start_row: top_left.1,
+            end_col: top_left.0 + width.saturating_sub(1),
+            end_row: top_left.1 + height.saturating_sub(1),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 #[allow(dead_code)]
 enum EditChange {
@@ -125,6 +172,7 @@ impl Default for Camera {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LayerVisibility {
     pub ground: bool,
     pub left_wall: bool,
@@ -141,6 +189,16 @@ impl Default for LayerVisibility {
     }
 }
 
+impl LayerVisibility {
+    pub fn any(self) -> bool {
+        self.ground || self.left_wall || self.right_wall
+    }
+
+    pub fn all(self) -> bool {
+        self.ground && self.left_wall && self.right_wall
+    }
+}
+
 pub struct StampResult {
     pub changed_tiles: usize,
     pub clipped_tiles: usize,
@@ -154,6 +212,7 @@ pub struct MapDocument {
     pub id_hint: Option<u32>,
     pub name_hint: Option<String>,
     pub camera: Camera,
+    selection: Option<TileSelection>,
     undo_stack: Vec<Vec<EditChange>>,
     redo_stack: Vec<Vec<EditChange>>,
     pending_stroke: Option<PendingStroke>,
@@ -181,6 +240,7 @@ impl MapDocument {
             id_hint: None,
             name_hint: None,
             camera: Camera::default(),
+            selection: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             pending_stroke: None,
@@ -221,6 +281,7 @@ impl MapDocument {
             id_hint,
             name_hint,
             camera: Camera::default(),
+            selection: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             pending_stroke: None,
@@ -237,6 +298,7 @@ impl MapDocument {
             id_hint: None,
             name_hint: Some(asset.name),
             camera: Camera::default(),
+            selection: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             pending_stroke: None,
@@ -303,6 +365,7 @@ impl MapDocument {
         self.map.height = height;
         self.map.tiles = new_tiles;
         self.camera = Camera::default();
+        self.selection = None;
         self.dirty = true;
         self.undo_stack.clear();
         self.redo_stack.clear();
@@ -357,10 +420,296 @@ impl MapDocument {
         self.map.height = height;
         self.map.tiles = new_tiles;
         self.camera = Camera::default();
+        self.selection = None;
         self.dirty = true;
         self.undo_stack.clear();
         self.redo_stack.clear();
         Ok(())
+    }
+
+    pub fn selection(&self) -> Option<TileSelection> {
+        self.selection
+    }
+
+    pub fn set_selection(&mut self, selection: Option<TileSelection>) {
+        self.selection = selection;
+    }
+
+    #[cfg(test)]
+    pub fn clear_selection_layer(&mut self, selection: TileSelection, layer: PaintLayer) -> usize {
+        let _ = self.finish_stroke();
+
+        let (min_col, min_row, max_col, max_row) = selection.normalized_bounds();
+        let mut cleared_tiles = 0usize;
+
+        for row in min_row..=max_row {
+            for col in min_col..=max_col {
+                if self.paint_layer_stroke_tile(layer, col, row, 0) {
+                    cleared_tiles += 1;
+                }
+            }
+        }
+
+        let _ = self.finish_stroke();
+        cleared_tiles
+    }
+
+    pub fn selection_map(&self, selection: TileSelection) -> map::Map {
+        let (min_col, min_row, max_col, max_row) = selection.normalized_bounds();
+        let width = max_col - min_col + 1;
+        let height = max_row - min_row + 1;
+        let mut selected = map::Map::new(width, height);
+
+        for row_offset in 0..height {
+            for col_offset in 0..width {
+                let src_col = min_col + col_offset;
+                let src_row = min_row + row_offset;
+                let src_idx = src_row as usize * self.map.width as usize + src_col as usize;
+                let dst_idx = row_offset as usize * width as usize + col_offset as usize;
+                selected.tiles[dst_idx] = self.map.tiles[src_idx];
+            }
+        }
+
+        selected
+    }
+
+    pub fn selection_map_for_visible_layers(
+        &self,
+        selection: TileSelection,
+        visibility: LayerVisibility,
+    ) -> map::Map {
+        let mut selected = self.selection_map(selection);
+        for tile in &mut selected.tiles {
+            if !visibility.ground {
+                tile.ground = 0;
+            }
+            if !visibility.left_wall {
+                tile.left_wall = 0;
+            }
+            if !visibility.right_wall {
+                tile.right_wall = 0;
+            }
+        }
+        selected
+    }
+
+    pub fn clear_selection_visible_layers(
+        &mut self,
+        selection: TileSelection,
+        visibility: LayerVisibility,
+    ) -> usize {
+        let _ = self.finish_stroke();
+        if !visibility.any() {
+            return 0;
+        }
+
+        let (min_col, min_row, max_col, max_row) = selection.normalized_bounds();
+        let mut changes = Vec::new();
+
+        for row in min_row..=max_row {
+            for col in min_col..=max_col {
+                let idx = row as usize * self.map.width as usize + col as usize;
+                let old_tile = self.map.tiles[idx];
+                let mut new_tile = old_tile;
+
+                if visibility.ground {
+                    new_tile.ground = 0;
+                }
+                if visibility.left_wall {
+                    new_tile.left_wall = 0;
+                }
+                if visibility.right_wall {
+                    new_tile.right_wall = 0;
+                }
+
+                if old_tile == new_tile {
+                    continue;
+                }
+
+                self.map.tiles[idx] = new_tile;
+                changes.push(EditChange::Tile {
+                    idx,
+                    old: old_tile,
+                    new: new_tile,
+                });
+            }
+        }
+
+        let changed_tiles = changes.len();
+        let _ = self.push_history(changes);
+        changed_tiles
+    }
+
+    #[cfg(test)]
+    pub fn paste_map_region(&mut self, top_left: (u16, u16), source: &map::Map) -> usize {
+        let _ = self.finish_stroke();
+
+        let mut changes = Vec::new();
+
+        for src_row in 0..source.height {
+            for src_col in 0..source.width {
+                let dst_col = u32::from(top_left.0) + u32::from(src_col);
+                let dst_row = u32::from(top_left.1) + u32::from(src_row);
+                if dst_col >= u32::from(self.map.width) || dst_row >= u32::from(self.map.height) {
+                    continue;
+                }
+
+                let src_idx = src_row as usize * source.width as usize + src_col as usize;
+                let dst_idx = dst_row as usize * self.map.width as usize + dst_col as usize;
+                let old_tile = self.map.tiles[dst_idx];
+                let new_tile = source.tiles[src_idx];
+                if old_tile == new_tile {
+                    continue;
+                }
+
+                self.map.tiles[dst_idx] = new_tile;
+                changes.push(EditChange::Tile {
+                    idx: dst_idx,
+                    old: old_tile,
+                    new: new_tile,
+                });
+            }
+        }
+
+        let changed_tiles = changes.len();
+        let _ = self.push_history(changes);
+        changed_tiles
+    }
+
+    pub fn paste_visible_layers(
+        &mut self,
+        top_left: (u16, u16),
+        source: &map::Map,
+        visibility: LayerVisibility,
+    ) -> usize {
+        let _ = self.finish_stroke();
+        if !visibility.any() {
+            return 0;
+        }
+
+        let mut changes = Vec::new();
+
+        for src_row in 0..source.height {
+            for src_col in 0..source.width {
+                let dst_col = u32::from(top_left.0) + u32::from(src_col);
+                let dst_row = u32::from(top_left.1) + u32::from(src_row);
+                if dst_col >= u32::from(self.map.width) || dst_row >= u32::from(self.map.height) {
+                    continue;
+                }
+
+                let src_idx = src_row as usize * source.width as usize + src_col as usize;
+                let dst_idx = dst_row as usize * self.map.width as usize + dst_col as usize;
+                let old_tile = self.map.tiles[dst_idx];
+                let mut new_tile = old_tile;
+                let source_tile = source.tiles[src_idx];
+
+                if visibility.ground {
+                    new_tile.ground = source_tile.ground;
+                }
+                if visibility.left_wall {
+                    new_tile.left_wall = source_tile.left_wall;
+                }
+                if visibility.right_wall {
+                    new_tile.right_wall = source_tile.right_wall;
+                }
+
+                if old_tile == new_tile {
+                    continue;
+                }
+
+                self.map.tiles[dst_idx] = new_tile;
+                changes.push(EditChange::Tile {
+                    idx: dst_idx,
+                    old: old_tile,
+                    new: new_tile,
+                });
+            }
+        }
+
+        let changed_tiles = changes.len();
+        let _ = self.push_history(changes);
+        changed_tiles
+    }
+
+    pub fn move_selection_visible_layers(
+        &mut self,
+        selection: TileSelection,
+        top_left: (u16, u16),
+        visibility: LayerVisibility,
+    ) -> usize {
+        let _ = self.finish_stroke();
+        if !visibility.any() {
+            return 0;
+        }
+
+        let original_tiles = self.map.tiles.clone();
+        let mut new_tiles = original_tiles.clone();
+        let source = self.selection_map_for_visible_layers(selection, visibility);
+        let transparent_zero = !visibility.all();
+        let (min_col, min_row, max_col, max_row) = selection.normalized_bounds();
+
+        for row in min_row..=max_row {
+            for col in min_col..=max_col {
+                let idx = row as usize * self.map.width as usize + col as usize;
+                let mut new_tile = new_tiles[idx];
+                if visibility.ground {
+                    new_tile.ground = 0;
+                }
+                if visibility.left_wall {
+                    new_tile.left_wall = 0;
+                }
+                if visibility.right_wall {
+                    new_tile.right_wall = 0;
+                }
+                new_tiles[idx] = new_tile;
+            }
+        }
+
+        for src_row in 0..source.height {
+            for src_col in 0..source.width {
+                let dst_col = top_left.0 + src_col;
+                let dst_row = top_left.1 + src_row;
+                let src_idx = src_row as usize * source.width as usize + src_col as usize;
+                let dst_idx = dst_row as usize * self.map.width as usize + dst_col as usize;
+                let source_tile = source.tiles[src_idx];
+                let mut new_tile = new_tiles[dst_idx];
+
+                if visibility.ground && (!transparent_zero || source_tile.ground != 0) {
+                    new_tile.ground = source_tile.ground;
+                }
+                if visibility.left_wall && (!transparent_zero || source_tile.left_wall != 0) {
+                    new_tile.left_wall = source_tile.left_wall;
+                }
+                if visibility.right_wall && (!transparent_zero || source_tile.right_wall != 0) {
+                    new_tile.right_wall = source_tile.right_wall;
+                }
+
+                new_tiles[dst_idx] = new_tile;
+            }
+        }
+
+        let mut changes = Vec::new();
+        for (idx, (old_tile, new_tile)) in original_tiles.iter().zip(new_tiles.iter()).enumerate() {
+            if old_tile == new_tile {
+                continue;
+            }
+
+            self.map.tiles[idx] = *new_tile;
+            changes.push(EditChange::Tile {
+                idx,
+                old: *old_tile,
+                new: *new_tile,
+            });
+        }
+
+        let changed_tiles = changes.len();
+        let _ = self.push_history(changes);
+        changed_tiles
+    }
+
+    #[cfg(test)]
+    pub fn move_selection_to(&mut self, selection: TileSelection, top_left: (u16, u16)) -> usize {
+        self.move_selection_visible_layers(selection, top_left, LayerVisibility::default())
     }
 
     pub fn display_name(&self) -> String {
@@ -803,6 +1152,440 @@ mod tests {
         assert!(doc.redo());
         assert_eq!(doc.map.tiles[0].left_wall, 12);
         assert_eq!(doc.map.tiles[1].left_wall, 12);
+    }
+
+    #[test]
+    fn clear_selection_layer_only_affects_target_layer_and_supports_undo_redo() {
+        let mut doc = MapDocument::new_map(4, 4);
+
+        for row in 1..=2 {
+            for col in 1..=2 {
+                let idx = row as usize * doc.map.width as usize + col as usize;
+                doc.map.tiles[idx].ground = 10;
+                doc.map.tiles[idx].left_wall = 20;
+                doc.map.tiles[idx].right_wall = 30;
+            }
+        }
+
+        doc.map.tiles[0].ground = 99;
+        doc.map.tiles[0].left_wall = 98;
+        doc.map.tiles[0].right_wall = 97;
+
+        let selection = TileSelection::from_points((2, 2), (1, 1));
+        assert_eq!(
+            doc.clear_selection_layer(selection, PaintLayer::LeftWall),
+            4
+        );
+
+        for row in 1..=2 {
+            for col in 1..=2 {
+                let idx = row as usize * doc.map.width as usize + col as usize;
+                assert_eq!(doc.map.tiles[idx].ground, 10);
+                assert_eq!(doc.map.tiles[idx].left_wall, 0);
+                assert_eq!(doc.map.tiles[idx].right_wall, 30);
+            }
+        }
+        assert_eq!(doc.map.tiles[0].ground, 99);
+        assert_eq!(doc.map.tiles[0].left_wall, 98);
+        assert_eq!(doc.map.tiles[0].right_wall, 97);
+
+        assert!(doc.undo());
+        for row in 1..=2 {
+            for col in 1..=2 {
+                let idx = row as usize * doc.map.width as usize + col as usize;
+                assert_eq!(doc.map.tiles[idx].left_wall, 20);
+            }
+        }
+
+        assert!(doc.redo());
+        for row in 1..=2 {
+            for col in 1..=2 {
+                let idx = row as usize * doc.map.width as usize + col as usize;
+                assert_eq!(doc.map.tiles[idx].left_wall, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn selection_map_and_paste_region_roundtrip_full_tiles() {
+        let mut doc = MapDocument::new_map(4, 4);
+
+        doc.map.tiles[1 * 4 + 1] = map::Tile {
+            ground: 1,
+            left_wall: 2,
+            right_wall: 3,
+        };
+        doc.map.tiles[1 * 4 + 2] = map::Tile {
+            ground: 4,
+            left_wall: 0,
+            right_wall: 5,
+        };
+        doc.map.tiles[2 * 4 + 1] = map::Tile::default();
+        doc.map.tiles[2 * 4 + 2] = map::Tile {
+            ground: 6,
+            left_wall: 7,
+            right_wall: 8,
+        };
+
+        let selection = TileSelection::from_points((1, 1), (2, 2));
+        let copied = doc.selection_map(selection);
+        assert_eq!(copied.width, 2);
+        assert_eq!(copied.height, 2);
+        assert_eq!(
+            copied.tiles[0],
+            map::Tile {
+                ground: 1,
+                left_wall: 2,
+                right_wall: 3,
+            }
+        );
+        assert_eq!(
+            copied.tiles[1],
+            map::Tile {
+                ground: 4,
+                left_wall: 0,
+                right_wall: 5,
+            }
+        );
+        assert_eq!(copied.tiles[2], map::Tile::default());
+        assert_eq!(
+            copied.tiles[3],
+            map::Tile {
+                ground: 6,
+                left_wall: 7,
+                right_wall: 8,
+            }
+        );
+
+        for idx in [0usize, 1, 4, 5] {
+            doc.map.tiles[idx] = map::Tile {
+                ground: 99,
+                left_wall: 98,
+                right_wall: 97,
+            };
+        }
+
+        assert_eq!(doc.paste_map_region((0, 0), &copied), 4);
+        assert_eq!(
+            doc.map.tiles[0],
+            map::Tile {
+                ground: 1,
+                left_wall: 2,
+                right_wall: 3,
+            }
+        );
+        assert_eq!(
+            doc.map.tiles[1],
+            map::Tile {
+                ground: 4,
+                left_wall: 0,
+                right_wall: 5,
+            }
+        );
+        assert_eq!(doc.map.tiles[4], map::Tile::default());
+        assert_eq!(
+            doc.map.tiles[5],
+            map::Tile {
+                ground: 6,
+                left_wall: 7,
+                right_wall: 8,
+            }
+        );
+
+        assert!(doc.undo());
+        for idx in [0usize, 1, 4, 5] {
+            assert_eq!(
+                doc.map.tiles[idx],
+                map::Tile {
+                    ground: 99,
+                    left_wall: 98,
+                    right_wall: 97,
+                }
+            );
+        }
+
+        assert!(doc.redo());
+        assert_eq!(doc.map.tiles[4], map::Tile::default());
+        assert_eq!(doc.map.tiles[5].right_wall, 8);
+    }
+
+    #[test]
+    fn move_selection_to_repositions_full_rectangle_with_undo_redo() {
+        let mut doc = MapDocument::new_map(5, 4);
+        doc.map.tiles[1 * 5 + 1] = map::Tile {
+            ground: 1,
+            left_wall: 2,
+            right_wall: 3,
+        };
+        doc.map.tiles[1 * 5 + 2] = map::Tile {
+            ground: 4,
+            left_wall: 5,
+            right_wall: 6,
+        };
+        doc.map.tiles[2 * 5 + 1] = map::Tile {
+            ground: 7,
+            left_wall: 8,
+            right_wall: 9,
+        };
+        doc.map.tiles[2 * 5 + 2] = map::Tile::default();
+
+        let selection = TileSelection::from_points((1, 1), (2, 2));
+        assert_eq!(doc.move_selection_to(selection, (2, 0)), 5);
+
+        assert_eq!(doc.map.tiles[1 * 5 + 1], map::Tile::default());
+        assert_eq!(
+            doc.map.tiles[1 * 5 + 2],
+            map::Tile {
+                ground: 7,
+                left_wall: 8,
+                right_wall: 9,
+            }
+        );
+        assert_eq!(
+            doc.map.tiles[2],
+            map::Tile {
+                ground: 1,
+                left_wall: 2,
+                right_wall: 3,
+            }
+        );
+        assert_eq!(
+            doc.map.tiles[3],
+            map::Tile {
+                ground: 4,
+                left_wall: 5,
+                right_wall: 6,
+            }
+        );
+        assert_eq!(
+            doc.map.tiles[7],
+            map::Tile {
+                ground: 7,
+                left_wall: 8,
+                right_wall: 9,
+            }
+        );
+
+        assert!(doc.undo());
+        assert_eq!(
+            doc.map.tiles[1 * 5 + 1],
+            map::Tile {
+                ground: 1,
+                left_wall: 2,
+                right_wall: 3,
+            }
+        );
+        assert_eq!(
+            doc.map.tiles[1 * 5 + 2],
+            map::Tile {
+                ground: 4,
+                left_wall: 5,
+                right_wall: 6,
+            }
+        );
+
+        assert!(doc.redo());
+        assert_eq!(doc.map.tiles[1 * 5 + 1], map::Tile::default());
+        assert_eq!(doc.map.tiles[2].ground, 1);
+        assert_eq!(doc.map.tiles[7].left_wall, 8);
+    }
+
+    #[test]
+    fn move_selection_visible_layers_preserves_ground_when_moving_walls_only() {
+        let mut doc = MapDocument::new_map(5, 4);
+        doc.map.tiles[1 * 5 + 1] = map::Tile {
+            ground: 11,
+            left_wall: 21,
+            right_wall: 31,
+        };
+        doc.map.tiles[1 * 5 + 2] = map::Tile {
+            ground: 12,
+            left_wall: 22,
+            right_wall: 32,
+        };
+        doc.map.tiles[2] = map::Tile {
+            ground: 90,
+            left_wall: 0,
+            right_wall: 0,
+        };
+        doc.map.tiles[3] = map::Tile {
+            ground: 91,
+            left_wall: 0,
+            right_wall: 0,
+        };
+
+        let selection = TileSelection::from_points((1, 1), (2, 1));
+        let moved = doc.move_selection_visible_layers(
+            selection,
+            (2, 0),
+            LayerVisibility {
+                ground: false,
+                left_wall: true,
+                right_wall: true,
+            },
+        );
+        assert_eq!(moved, 4);
+
+        assert_eq!(
+            doc.map.tiles[1 * 5 + 1],
+            map::Tile {
+                ground: 11,
+                left_wall: 0,
+                right_wall: 0,
+            }
+        );
+        assert_eq!(
+            doc.map.tiles[1 * 5 + 2],
+            map::Tile {
+                ground: 12,
+                left_wall: 0,
+                right_wall: 0,
+            }
+        );
+        assert_eq!(
+            doc.map.tiles[2],
+            map::Tile {
+                ground: 90,
+                left_wall: 21,
+                right_wall: 31,
+            }
+        );
+        assert_eq!(
+            doc.map.tiles[3],
+            map::Tile {
+                ground: 91,
+                left_wall: 22,
+                right_wall: 32,
+            }
+        );
+
+        assert!(doc.undo());
+        assert_eq!(
+            doc.map.tiles[1 * 5 + 1],
+            map::Tile {
+                ground: 11,
+                left_wall: 21,
+                right_wall: 31,
+            }
+        );
+        assert_eq!(doc.map.tiles[2].ground, 90);
+        assert_eq!(doc.map.tiles[2].left_wall, 0);
+
+        assert!(doc.redo());
+        assert_eq!(doc.map.tiles[1 * 5 + 1].ground, 11);
+        assert_eq!(doc.map.tiles[1 * 5 + 1].left_wall, 0);
+        assert_eq!(doc.map.tiles[2].ground, 90);
+        assert_eq!(doc.map.tiles[2].right_wall, 31);
+    }
+
+    #[test]
+    fn move_selection_visible_layers_treats_empty_subset_tiles_as_transparent() {
+        let mut doc = MapDocument::new_map(5, 3);
+        doc.map.tiles[1 * 5] = map::Tile {
+            ground: 1,
+            left_wall: 10,
+            right_wall: 20,
+        };
+        doc.map.tiles[1 * 5 + 1] = map::Tile {
+            ground: 2,
+            left_wall: 0,
+            right_wall: 0,
+        };
+        doc.map.tiles[3] = map::Tile {
+            ground: 50,
+            left_wall: 60,
+            right_wall: 70,
+        };
+
+        let selection = TileSelection::from_points((0, 1), (1, 1));
+        let moved = doc.move_selection_visible_layers(
+            selection,
+            (2, 0),
+            LayerVisibility {
+                ground: false,
+                left_wall: true,
+                right_wall: true,
+            },
+        );
+        assert_eq!(moved, 2);
+
+        assert_eq!(
+            doc.map.tiles[1 * 5],
+            map::Tile {
+                ground: 1,
+                left_wall: 0,
+                right_wall: 0,
+            }
+        );
+        assert_eq!(
+            doc.map.tiles[2],
+            map::Tile {
+                ground: 0,
+                left_wall: 10,
+                right_wall: 20,
+            }
+        );
+        assert_eq!(
+            doc.map.tiles[3],
+            map::Tile {
+                ground: 50,
+                left_wall: 60,
+                right_wall: 70,
+            }
+        );
+
+        assert!(doc.undo());
+        assert_eq!(doc.map.tiles[1 * 5].left_wall, 10);
+        assert_eq!(doc.map.tiles[2].left_wall, 0);
+        assert_eq!(doc.map.tiles[3].right_wall, 70);
+    }
+
+    #[test]
+    fn visible_layer_selection_copy_paste_and_clear_preserve_hidden_layers() {
+        let mut doc = MapDocument::new_map(4, 3);
+        doc.map.tiles[1 * 4 + 1] = map::Tile {
+            ground: 10,
+            left_wall: 20,
+            right_wall: 30,
+        };
+        doc.map.tiles[1 * 4 + 2] = map::Tile {
+            ground: 11,
+            left_wall: 21,
+            right_wall: 31,
+        };
+
+        let selection = TileSelection::from_points((1, 1), (2, 1));
+        let visible = LayerVisibility {
+            ground: false,
+            left_wall: true,
+            right_wall: false,
+        };
+
+        let copied = doc.selection_map_for_visible_layers(selection, visible);
+        assert_eq!(copied.tiles[0].ground, 0);
+        assert_eq!(copied.tiles[0].left_wall, 20);
+        assert_eq!(copied.tiles[0].right_wall, 0);
+
+        doc.map.tiles[0] = map::Tile {
+            ground: 99,
+            left_wall: 98,
+            right_wall: 97,
+        };
+        assert_eq!(doc.paste_visible_layers((0, 0), &copied, visible), 2);
+        assert_eq!(
+            doc.map.tiles[0],
+            map::Tile {
+                ground: 99,
+                left_wall: 20,
+                right_wall: 97,
+            }
+        );
+        assert_eq!(doc.map.tiles[1].left_wall, 21);
+
+        assert_eq!(doc.clear_selection_visible_layers(selection, visible), 2);
+        assert_eq!(doc.map.tiles[1 * 4 + 1].ground, 10);
+        assert_eq!(doc.map.tiles[1 * 4 + 1].left_wall, 0);
+        assert_eq!(doc.map.tiles[1 * 4 + 1].right_wall, 30);
     }
 
     #[test]

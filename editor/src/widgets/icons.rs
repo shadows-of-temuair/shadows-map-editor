@@ -13,7 +13,7 @@ const TOOL_ICON_LINE: &str = "\u{E205}";
 const TOOL_ICON_ERASER: &str = "\u{1F4A3}";
 const TOOL_ICON_FILL: &str = "\u{E225}";
 const TOOL_ICON_EYEDROPPER: &str = "\u{E200}";
-const TOOL_ICON_PREFAB: &str = "\u{E2A1}";
+const TOOL_ICON_PREFAB: &str = "\u{E5D8}";
 
 pub fn install_font(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();

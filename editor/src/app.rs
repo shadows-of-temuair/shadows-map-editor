@@ -9,18 +9,24 @@ use std::{
 use eframe::egui;
 use tracing::{info, warn};
 
-use crate::document::{DocumentKind, LayerVisibility, MapDocument, PaintLayer};
+mod selection;
+
+use self::selection::{SelectionClipboard, SelectionDragMode};
+use crate::document::{DocumentKind, LayerVisibility, MapDocument, PaintLayer, TileSelection};
 use crate::map_list::{MapList, MapMetadataHint};
 use crate::palette_lookup::LoadedPaletteLookup;
 use crate::panels::{
     AssetSetupDialog, AssetSetupDialogAction, ExportDialog, ExportDialogAction, EyedropperPick,
-    InspectorPanel, InspectorResponse, MapSizeDialog, PrefabDeleteDialog, PrefabDeleteDialogAction,
-    StatusBarAction, StatusBarPanel, TabBarAction, TabBarPanel, TitleBarPanel, Tool, ToolbarAction,
-    ToolbarPanel, UnsavedChangesDialog, UnsavedChangesDialogAction, ViewportPanel, WindowFrame,
+    InspectorPanel, InspectorResponse, MapSizeDialog, PrefabCreateDialog, PrefabCreateDialogAction,
+    PrefabDeleteDialog, PrefabDeleteDialogAction, SelectionMovePreview, StatusBarAction,
+    StatusBarPanel, TabBarAction, TabBarPanel, TitleBarPanel, Tool, ToolbarAction, ToolbarPanel,
+    UnsavedChangesDialog, UnsavedChangesDialogAction, ViewportPanel, WindowFrame,
 };
 use crate::prefab::{self, PrefabAsset};
 use crate::shape::{self, ShapeKind};
 use crate::theme;
+
+const SELECTION_CLIPBOARD_SENTINEL: &str = "__shadows_map_editor_selection__";
 
 enum PendingDiscardAction {
     CloseTab { index: usize },
@@ -39,6 +45,10 @@ struct PendingPrefabDeletion {
 
 struct PendingPrefabRename {
     path: PathBuf,
+}
+
+struct PendingPrefabCreation {
+    map: map::Map,
 }
 
 struct LoadedAssets {
@@ -116,11 +126,14 @@ pub struct EditorApp {
     selected_prefab: Option<usize>,
     prefab_search: String,
     hover_tile: (u16, u16),
-    selected_tile: Option<(u16, u16)>,
     selected_ground_tile: u16,
     selected_wall_tile: u16,
     reveal_ground_tile_in_palette: Option<u16>,
     reveal_wall_tile_in_palette: Option<u16>,
+    selection_clipboard: Option<SelectionClipboard>,
+    paste_preview_active: bool,
+    selection_drag_start_tile: Option<(u16, u16)>,
+    selection_drag_mode: Option<SelectionDragMode>,
     last_pencil_click_tile: Option<(u16, u16)>,
     line_tool_start_tile: Option<(u16, u16)>,
     shape_tool_start_tile: Option<(u16, u16)>,
@@ -132,6 +145,8 @@ pub struct EditorApp {
     asset_load_task: Option<AssetLoadTask>,
     unsaved_changes_dialog: UnsavedChangesDialog,
     pending_unsaved_changes: Option<PendingUnsavedChanges>,
+    prefab_create_dialog: PrefabCreateDialog,
+    pending_prefab_creation: Option<PendingPrefabCreation>,
     prefab_delete_dialog: PrefabDeleteDialog,
     pending_prefab_deletion: Option<PendingPrefabDeletion>,
     pending_prefab_rename: Option<PendingPrefabRename>,
@@ -156,7 +171,7 @@ impl EditorApp {
         let mut app = Self {
             documents: vec![MapDocument::new(50, 50)],
             active_tab: 0,
-            active_tool: Tool::Pencil,
+            active_tool: Tool::Select,
             active_shape_kind: ShapeKind::Rect,
             active_paint_layer: PaintLayer::Ground,
             last_wall_paint_layer: PaintLayer::LeftWall,
@@ -178,11 +193,14 @@ impl EditorApp {
             wall_texture: None,
             tab_overlay_texture: None,
             hover_tile: (0, 0),
-            selected_tile: None,
             selected_ground_tile: 0,
             selected_wall_tile: 0,
             reveal_ground_tile_in_palette: None,
             reveal_wall_tile_in_palette: None,
+            selection_clipboard: None,
+            paste_preview_active: false,
+            selection_drag_start_tile: None,
+            selection_drag_mode: None,
             last_pencil_click_tile: None,
             line_tool_start_tile: None,
             shape_tool_start_tile: None,
@@ -200,6 +218,8 @@ impl EditorApp {
             asset_load_task: None,
             unsaved_changes_dialog: UnsavedChangesDialog::default(),
             pending_unsaved_changes: None,
+            prefab_create_dialog: PrefabCreateDialog::default(),
+            pending_prefab_creation: None,
             prefab_delete_dialog: PrefabDeleteDialog::default(),
             pending_prefab_deletion: None,
             pending_prefab_rename: None,
@@ -222,6 +242,9 @@ impl EditorApp {
     }
 
     fn clear_edit_anchors(&mut self) {
+        self.paste_preview_active = false;
+        self.selection_drag_start_tile = None;
+        self.selection_drag_mode = None;
         self.last_pencil_click_tile = None;
         self.line_tool_start_tile = None;
         self.shape_tool_start_tile = None;
@@ -281,6 +304,11 @@ impl EditorApp {
     fn set_active_tool(&mut self, tool: Tool) {
         if self.active_tool != tool {
             self.active_tool = tool;
+            self.selection_drag_start_tile = None;
+            self.selection_drag_mode = None;
+            if tool != Tool::Select {
+                self.paste_preview_active = false;
+            }
             self.line_tool_start_tile = None;
             self.shape_tool_start_tile = None;
         }
@@ -307,14 +335,6 @@ impl EditorApp {
         match layer {
             PaintLayer::Ground => self.selected_ground_tile,
             PaintLayer::LeftWall | PaintLayer::RightWall => self.selected_wall_tile,
-        }
-    }
-
-    fn tile_value_for_layer(tile: &map::Tile, layer: PaintLayer) -> u16 {
-        match layer {
-            PaintLayer::Ground => tile.ground,
-            PaintLayer::LeftWall => tile.left_wall,
-            PaintLayer::RightWall => tile.right_wall,
         }
     }
 
@@ -1253,6 +1273,94 @@ impl EditorApp {
         }
     }
 
+    fn begin_prefab_create_flow(&mut self) -> bool {
+        let Some(selection) = self.effective_selection_for_any_occupied_tile() else {
+            return false;
+        };
+
+        self.pending_prefab_creation = Some(PendingPrefabCreation {
+            map: self.documents[self.active_tab].selection_map(selection),
+        });
+        self.prefab_create_dialog.open();
+        true
+    }
+
+    fn resolve_prefab_create_action(&mut self, action: PrefabCreateDialogAction) {
+        match action {
+            PrefabCreateDialogAction::None => {}
+            PrefabCreateDialogAction::Cancel => {
+                self.prefab_create_dialog.close();
+                self.pending_prefab_creation = None;
+            }
+            PrefabCreateDialogAction::Create {
+                name,
+                include_ground,
+            } => match self.create_prefab_from_pending_selection(&name, include_ground) {
+                Ok(path) => {
+                    let created_name = path
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .unwrap_or("prefab");
+                    self.prefab_create_dialog.close();
+                    self.pending_prefab_creation = None;
+                    self.status_message = format!("Created prefab {}.", created_name);
+                }
+                Err(error) => {
+                    self.prefab_create_dialog
+                        .restore_after_error(name, include_ground, error);
+                }
+            },
+        }
+    }
+
+    fn create_prefab_from_pending_selection(
+        &mut self,
+        requested_name: &str,
+        include_ground: bool,
+    ) -> Result<PathBuf, String> {
+        let Some(pending) = self.pending_prefab_creation.as_ref() else {
+            return Err("No selection is available to create a prefab.".to_string());
+        };
+
+        let sanitized_name = prefab::sanitize_prefab_name(requested_name);
+        if sanitized_name.is_empty() {
+            return Err("Enter a prefab name.".to_string());
+        }
+        if self.prefab_assets.iter().any(|prefab| {
+            prefab
+                .file_stem_name()
+                .eq_ignore_ascii_case(&sanitized_name)
+        }) {
+            return Err(format!("A prefab named {} already exists.", sanitized_name));
+        }
+
+        let trimmed = prefab::trimmed_map(&pending.map, include_ground).ok_or_else(|| {
+            if include_ground {
+                "The selection does not contain any tiles to save.".to_string()
+            } else {
+                "The selection does not contain any wall tiles unless Include ground is enabled."
+                    .to_string()
+            }
+        })?;
+
+        let prefabs_dir = prefab::ensure_prefabs_dir()
+            .map_err(|error| format!("Could not access prefabs/: {}", error))?;
+        let destination = prefabs_dir.join(format!("{sanitized_name}.ron"));
+        let prefab_file = prefab::PrefabFile::from_map(&trimmed, Some(sanitized_name));
+        prefab_file.save(&destination).map_err(|error| {
+            format!(
+                "Could not create prefab {}: {}",
+                destination.display(),
+                error
+            )
+        })?;
+
+        self.reload_prefabs();
+        self.select_prefab_by_path(&destination);
+        self.open_document_from_path(destination.clone());
+        Ok(destination)
+    }
+
     fn begin_prefab_rename_flow(&mut self, index: usize) {
         let Some(prefab) = self.prefab_assets.get(index) else {
             return;
@@ -1879,6 +1987,9 @@ impl EditorApp {
             close,
             undo,
             redo,
+            cut,
+            copy,
+            paste,
             export,
             tool,
             toggle_ground_wall_layer,
@@ -1887,9 +1998,17 @@ impl EditorApp {
             toggle_tab_overlay,
             keyboard_zoom,
             reset_zoom,
+            delete_selection,
+            clear_selection,
         ) = ctx.input(|i| {
             let cmd = i.modifiers.command;
             let shift = i.modifiers.shift;
+            let cut_event = i.events.iter().any(|event| matches!(event, egui::Event::Cut));
+            let copy_event = i.events.iter().any(|event| matches!(event, egui::Event::Copy));
+            let paste_event = i
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::Paste(_)));
 
             // Tool shortcuts (no modifiers)
             let tool = if !keyboard_captured && !cmd && !shift {
@@ -1942,8 +2061,7 @@ impl EditorApp {
             };
 
             // Collision overlay toggle (Tab)
-            let toggle_tab_overlay =
-                !keyboard_captured && !cmd && !shift && i.key_pressed(egui::Key::Tab);
+            let toggle_tab_overlay = !cmd && !shift && i.key_pressed(egui::Key::Tab);
 
             // Keyboard zoom (Cmd+/-, snap to 25%; Cmd+0 reset)
             let keyboard_zoom: Option<i8> = if cmd && !shift {
@@ -1958,10 +2076,19 @@ impl EditorApp {
                 None
             };
             let reset_zoom = cmd && !shift && i.key_pressed(egui::Key::Num0);
+            let delete_selection = !keyboard_captured
+                && !cmd
+                && (i.key_pressed(egui::Key::Backspace) || i.key_pressed(egui::Key::Delete));
+            let clear_selection = !keyboard_captured && i.key_pressed(egui::Key::Escape);
             let save = cmd && !shift && i.key_pressed(egui::Key::S);
             let save_as = cmd && shift && i.key_pressed(egui::Key::S);
             let undo = cmd && !shift && i.key_pressed(egui::Key::Z);
             let redo = cmd && shift && i.key_pressed(egui::Key::Z);
+            let cut = !keyboard_captured && (cut_event || (cmd && !shift && i.key_pressed(egui::Key::X)));
+            let copy =
+                !keyboard_captured && (copy_event || (cmd && !shift && i.key_pressed(egui::Key::C)));
+            let paste =
+                !keyboard_captured && (paste_event || (cmd && !shift && i.key_pressed(egui::Key::V)));
 
             (
                 cmd && !shift && i.key_pressed(egui::Key::N),
@@ -1971,6 +2098,9 @@ impl EditorApp {
                 cmd && i.key_pressed(egui::Key::W),
                 undo,
                 redo,
+                cut,
+                copy,
+                paste,
                 cmd && i.key_pressed(egui::Key::E),
                 tool,
                 toggle_ground_wall_layer,
@@ -1979,6 +2109,8 @@ impl EditorApp {
                 toggle_tab_overlay,
                 keyboard_zoom,
                 reset_zoom,
+                delete_selection,
+                clear_selection,
             )
         });
 
@@ -2023,9 +2155,14 @@ impl EditorApp {
                 _ => {}
             }
         }
-        let tab_shortcut_blocked = self.export_dialog.is_open()
+        let tab_shortcut_blocked = self.asset_setup_dialog.is_open()
+            || self.export_dialog.is_open()
             || self.new_map_size_dialog.is_open()
-            || self.status_bar.is_size_dialog_open();
+            || self.prefab_create_dialog.is_open()
+            || self.prefab_delete_dialog.is_open()
+            || self.unsaved_changes_dialog.is_open()
+            || self.status_bar.is_size_dialog_open()
+            || self.renaming_prefab_index().is_some();
         if toggle_tab_overlay && !tab_shortcut_blocked {
             if self.sotp_data.is_some() {
                 self.show_collision_overlay = !self.show_collision_overlay;
@@ -2059,6 +2196,36 @@ impl EditorApp {
         }
         if redo {
             self.redo_active_document();
+        }
+        let shift_held = ctx.input(|i| i.modifiers.shift);
+        let action_layers = self.selection_action_layers(shift_held);
+        if cut {
+            if self.cut_active_selection_to_clipboard(action_layers) {
+                ctx.copy_text(SELECTION_CLIPBOARD_SENTINEL.to_string());
+            }
+        }
+        if copy {
+            if self.copy_active_selection_to_clipboard(action_layers) {
+                ctx.copy_text(SELECTION_CLIPBOARD_SENTINEL.to_string());
+            }
+        }
+        if paste && self.selection_clipboard.is_some() {
+            self.paste_preview_active = true;
+            self.status_message = "Paste preview active. Click to place.".to_string();
+        }
+        if delete_selection && self.active_tool == Tool::Select {
+            let _ = self.clear_active_selection_layers(action_layers);
+        }
+        if clear_selection {
+            let cleared_selection = self.clear_active_selection();
+            if self.paste_preview_active {
+                self.paste_preview_active = false;
+                self.status_message = if cleared_selection {
+                    "Paste canceled and selection cleared.".to_string()
+                } else {
+                    "Paste canceled.".to_string()
+                };
+            }
         }
         if save_as {
             self.save_document_as();
@@ -2158,6 +2325,7 @@ impl eframe::App for EditorApp {
         let can_undo = doc.can_undo();
         let can_redo = doc.can_redo();
         let current_zoom = doc.camera.zoom;
+        let selection_dimensions = doc.selection().map(|selection| selection.dimensions());
         let current_file_label = {
             let base = doc
                 .path
@@ -2181,6 +2349,7 @@ impl eframe::App for EditorApp {
             &current_file_label,
             effective_tool,
             self.hover_tile,
+            selection_dimensions,
             current_zoom,
             &self.status_message,
             self.status_progress(),
@@ -2264,6 +2433,9 @@ impl eframe::App for EditorApp {
 
         let asset_setup_action = self.asset_setup_dialog.show(ctx);
         self.resolve_asset_setup_action(asset_setup_action);
+
+        let prefab_create_action = self.prefab_create_dialog.show(ctx);
+        self.resolve_prefab_create_action(prefab_create_action);
 
         let prefab_delete_action = self.prefab_delete_dialog.show(ctx);
         self.resolve_prefab_delete_action(prefab_delete_action);
@@ -2363,6 +2535,7 @@ impl eframe::App for EditorApp {
         if requested_layer != self.active_paint_layer {
             self.set_active_paint_layer(requested_layer);
         }
+        let inspector_panel_resize_active = inspector_response.panel_resize_active;
         self.handle_inspector_response(inspector_response);
 
         // Viewport needs mutable access to camera for panning
@@ -2371,12 +2544,71 @@ impl eframe::App for EditorApp {
         }
 
         let stamp_prefab = self.selected_prefab_map().cloned();
+        let shift_held = ctx.input(|i| i.modifiers.shift);
+        let selection_action_layers = self.selection_action_layers(shift_held);
+        let selection_move_layers = self.selection_move_layers();
+        let selection_duplicate_layers = self.selection_duplicate_layers();
+        let duplicate_drag_active = shift_held
+            && matches!(
+                self.selection_drag_mode,
+                Some(SelectionDragMode::Moving { .. })
+            );
+        let selection_move_active = matches!(
+            self.selection_drag_mode,
+            Some(SelectionDragMode::Moving { .. })
+        );
+        let selection_move_preview = match (
+            self.selection_drag_mode.as_ref(),
+            self.documents[self.active_tab].selection(),
+        ) {
+            (
+                Some(SelectionDragMode::Moving {
+                    original_selection,
+                    preview_map,
+                    ..
+                }),
+                Some(selection),
+            ) => {
+                let (min_col, min_row, _, _) = selection.normalized_bounds();
+                Some(SelectionMovePreview {
+                    map: preview_map,
+                    top_left: (min_col, min_row),
+                    layers: if duplicate_drag_active {
+                        selection_duplicate_layers
+                    } else {
+                        selection_move_layers
+                    },
+                    ignore_overwrite_region: Some(*original_selection),
+                })
+            }
+            _ => None,
+        };
+        let paste_preview = if self.paste_preview_active {
+            self.selection_clipboard
+                .as_ref()
+                .map(|clipboard| SelectionMovePreview {
+                    map: &clipboard.map,
+                    top_left: (0, 0),
+                    layers: clipboard.layers,
+                    ignore_overwrite_region: None,
+                })
+        } else {
+            None
+        };
+        let modal_open = self.new_map_size_dialog.is_open()
+            || self.asset_setup_dialog.is_open()
+            || self.prefab_create_dialog.is_open()
+            || self.prefab_delete_dialog.is_open()
+            || self.export_dialog.is_open()
+            || self.unsaved_changes_dialog.is_open();
         let vp_result = {
             let doc = &mut self.documents[self.active_tab];
+            let current_selection = doc.selection();
             ViewportPanel::show(
                 ctx,
                 &doc.map,
                 &mut doc.camera,
+                !modal_open && !inspector_panel_resize_active,
                 effective_tool,
                 self.active_shape_kind,
                 self.active_paint_layer,
@@ -2384,6 +2616,13 @@ impl eframe::App for EditorApp {
                 self.selected_wall_tile,
                 self.line_tool_start_tile,
                 self.shape_tool_start_tile,
+                current_selection,
+                selection_move_active,
+                self.selection_drag_start_tile,
+                selection_move_preview,
+                paste_preview,
+                self.paste_preview_active.then_some(self.hover_tile),
+                self.selection_clipboard.is_some(),
                 stamp_prefab.as_ref(),
                 self.tile_atlas.as_ref(),
                 self.atlas_texture.as_ref(),
@@ -2399,8 +2638,112 @@ impl eframe::App for EditorApp {
         if let Some(tile) = vp_result.hover_tile {
             self.hover_tile = tile;
         }
-        if let Some(tile) = vp_result.clicked_tile {
-            self.selected_tile = Some(tile);
+        if let Some(tile) = vp_result.selection_drag_started {
+            let current_selection = self.documents[self.active_tab].selection();
+            self.selection_drag_start_tile = Some(tile);
+            if let Some(selection) = current_selection.filter(|selection| selection.contains(tile))
+            {
+                let (min_col, min_row, _, _) = selection.normalized_bounds();
+                self.selection_drag_mode = Some(SelectionDragMode::Moving {
+                    original_selection: selection,
+                    grab_offset: (tile.0 - min_col, tile.1 - min_row),
+                    preview_map: self.documents[self.active_tab].selection_map(selection),
+                    created_from_empty: false,
+                });
+            } else {
+                let single_tile_selection = TileSelection::from_points(tile, tile);
+                let convenience_drag_layers = if shift_held {
+                    selection_duplicate_layers
+                } else {
+                    selection_move_layers
+                };
+                let start_single_tile_drag = current_selection.is_none()
+                    && Self::tile_has_selection_layers(
+                        &self.documents[self.active_tab].map,
+                        tile,
+                        convenience_drag_layers,
+                    );
+                if start_single_tile_drag {
+                    self.documents[self.active_tab].set_selection(Some(single_tile_selection));
+                    self.selection_drag_mode = Some(SelectionDragMode::Moving {
+                        original_selection: single_tile_selection,
+                        grab_offset: (0, 0),
+                        preview_map: self.documents[self.active_tab]
+                            .selection_map(single_tile_selection),
+                        created_from_empty: true,
+                    });
+                } else {
+                    self.selection_drag_mode = Some(SelectionDragMode::Selecting);
+                    self.documents[self.active_tab].set_selection(None);
+                }
+            }
+        }
+        if let Some(tile) = vp_result.selection_drag_tile {
+            if let (Some(start), Some(mode)) = (
+                self.selection_drag_start_tile,
+                self.selection_drag_mode.as_ref(),
+            ) {
+                match mode {
+                    SelectionDragMode::Selecting => {
+                        if tile != start {
+                            self.documents[self.active_tab]
+                                .set_selection(Some(TileSelection::from_points(start, tile)));
+                        } else {
+                            self.documents[self.active_tab].set_selection(None);
+                        }
+                    }
+                    SelectionDragMode::Moving {
+                        original_selection,
+                        grab_offset,
+                        ..
+                    } => {
+                        let top_left = {
+                            let map = &self.documents[self.active_tab].map;
+                            Self::moved_selection_top_left(
+                                map,
+                                *original_selection,
+                                *grab_offset,
+                                tile,
+                            )
+                        };
+                        let (width, height) = original_selection.dimensions();
+                        self.documents[self.active_tab].set_selection(Some(
+                            TileSelection::from_top_left_size(top_left, width, height),
+                        ));
+                    }
+                }
+            }
+        }
+        if vp_result.clear_selection_requested {
+            self.documents[self.active_tab].set_selection(None);
+        }
+        if vp_result.cut_selection_requested {
+            if self.cut_active_selection_to_clipboard(selection_action_layers) {
+                ctx.copy_text(SELECTION_CLIPBOARD_SENTINEL.to_string());
+            }
+        }
+        if vp_result.copy_selection_requested {
+            if self.copy_active_selection_to_clipboard(selection_action_layers) {
+                ctx.copy_text(SELECTION_CLIPBOARD_SENTINEL.to_string());
+            }
+        }
+        if vp_result.activate_paste_preview && self.selection_clipboard.is_some() {
+            self.paste_preview_active = true;
+            self.status_message = "Paste preview active. Click to place.".to_string();
+        }
+        if vp_result.cancel_paste_preview {
+            self.paste_preview_active = false;
+            self.status_message = "Paste canceled.".to_string();
+        }
+        if let Some(tile) = vp_result.paste_preview_clicked_tile {
+            let keep_preview_active = ctx.input(|i| i.modifiers.shift);
+            let _ = self.paste_selection_clipboard_at(tile, keep_preview_active);
+        }
+        if vp_result.create_prefab_requested {
+            let _ = self.create_prefab_from_active_selection();
+        }
+        if vp_result.delete_selection_requested {
+            let _ = self.clear_active_selection_layers(selection_action_layers);
         }
         if let Some(pick) = vp_result.eyedropper_pick {
             match pick {
@@ -2430,6 +2773,9 @@ impl eframe::App for EditorApp {
                     self.status_message =
                         format!("Picked wall #{} (right).", self.selected_wall_tile);
                 }
+            }
+            if alt_held && self.active_tool == Tool::Select {
+                self.set_active_tool(Tool::Pencil);
             }
         }
 
@@ -2510,6 +2856,70 @@ impl eframe::App for EditorApp {
             doc.paint_layer_stroke_tile(paint_layer, col, row, paint_value);
         }
         let primary_down = ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
+        if self.active_tool == Tool::Select && !primary_down {
+            if let Some(SelectionDragMode::Moving {
+                original_selection,
+                created_from_empty,
+                ..
+            }) = self.selection_drag_mode.as_ref()
+            {
+                let original_selection = *original_selection;
+                let created_from_empty = *created_from_empty;
+                let preview_selection = doc.selection().unwrap_or(original_selection);
+                let (preview_min_col, preview_min_row, _, _) =
+                    preview_selection.normalized_bounds();
+                let (original_min_col, original_min_row, _, _) =
+                    original_selection.normalized_bounds();
+                if preview_min_col != original_min_col || preview_min_row != original_min_row {
+                    if shift_held {
+                        let source = doc.selection_map_for_visible_layers(
+                            original_selection,
+                            selection_duplicate_layers,
+                        );
+                        let (width, height) = original_selection.dimensions();
+                        let changed = doc.paste_visible_layers(
+                            (preview_min_col, preview_min_row),
+                            &source,
+                            selection_duplicate_layers,
+                        );
+                        doc.set_selection(Some(TileSelection::from_top_left_size(
+                            (preview_min_col, preview_min_row),
+                            width,
+                            height,
+                        )));
+                        if changed > 0 {
+                            self.status_message = format!(
+                                "Duplicated selection to {}, {}.",
+                                preview_min_col, preview_min_row
+                            );
+                        }
+                    } else {
+                        let changed = doc.move_selection_visible_layers(
+                            original_selection,
+                            (preview_min_col, preview_min_row),
+                            selection_move_layers,
+                        );
+                        if changed > 0 {
+                            self.status_message = format!(
+                                "Moved selection to {}, {}.",
+                                preview_min_col, preview_min_row
+                            );
+                        }
+                    }
+                } else {
+                    if created_from_empty {
+                        doc.set_selection(None);
+                    } else {
+                        doc.set_selection(Some(original_selection));
+                    }
+                }
+            }
+            self.selection_drag_start_tile = None;
+            self.selection_drag_mode = None;
+        } else if self.active_tool != Tool::Select {
+            self.selection_drag_start_tile = None;
+            self.selection_drag_mode = None;
+        }
         if !primary_down {
             doc.finish_stroke();
         }

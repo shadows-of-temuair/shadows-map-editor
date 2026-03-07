@@ -2,6 +2,7 @@ use eframe::egui;
 
 use crate::prefab;
 use crate::theme::theme_colors;
+use crate::widgets::icons;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MapSizeDialogMode {
@@ -58,6 +59,7 @@ impl MapSizeDialog {
 
         // Dim the background and allow click-away dismissal.
         egui::Area::new(egui::Id::new((id, "backdrop")))
+            .order(egui::Order::Middle)
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
                 let response = ui.allocate_response(screen.size(), egui::Sense::click());
@@ -73,6 +75,7 @@ impl MapSizeDialog {
             });
 
         egui::Window::new("")
+            .order(egui::Order::Foreground)
             .id(egui::Id::new(id))
             .title_bar(false)
             .open(&mut open)
@@ -90,12 +93,7 @@ impl MapSizeDialog {
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 
-                ui.label(
-                    egui::RichText::new(title)
-                        .size(18.0)
-                        .strong()
-                        .color(colors.text),
-                );
+                draw_modal_title(ui, &colors, title_icon(title), title);
                 ui.add_space(4.0);
 
                 if let Some(map) = current_map {
@@ -307,6 +305,39 @@ impl MapSizeDialog {
             color,
         );
     }
+}
+
+fn title_icon(title: &str) -> &'static str {
+    match title {
+        "New Map" => "\u{EC01}",
+        "New Prefab" => "\u{E5D8}",
+        "Resize Canvas" => "\u{EE04}",
+        "Map Size" => "\u{1F4CF}",
+        "Resize" => "\u{1F4CF}",
+        _ => "\u{1F4CF}",
+    }
+}
+
+fn draw_modal_title(
+    ui: &mut egui::Ui,
+    colors: &crate::theme::ThemeColors,
+    icon: &str,
+    title: &str,
+) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        ui.label(
+            egui::RichText::new(icon)
+                .font(icons::symbol_icon_font_id(18.0))
+                .color(colors.text),
+        );
+        ui.label(
+            egui::RichText::new(title)
+                .size(18.0)
+                .strong()
+                .color(colors.text),
+        );
+    });
 }
 
 #[cfg(test)]

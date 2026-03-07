@@ -10,6 +10,8 @@ use crate::widgets::tooltip;
 const STATUS_BAR_HEIGHT: f32 = 28.0;
 const STATUS_PROGRESS_BAR_SIZE: egui::Vec2 = egui::vec2(112.0, 10.0);
 const STATUS_MESSAGE_FADE_SECONDS: f64 = 0.18;
+const STATUS_POSITION_WIDTH: f32 = 92.0;
+const STATUS_SELECTION_WIDTH: f32 = 148.0;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum StatusBarAction {
@@ -132,6 +134,7 @@ impl StatusBarPanel {
         current_file_label: &str,
         active_tool: Tool,
         hover_tile: (u16, u16),
+        selection_dimensions: Option<(u16, u16)>,
         zoom: f32,
         status_message: &str,
         status_progress: Option<f32>,
@@ -189,11 +192,30 @@ impl StatusBarPanel {
 
                         // Position (rightmost) — fixed width to prevent layout jitter
                         let pos_text = format!("Pos: {:>3}, {:>3}", hover_tile.0, hover_tile.1);
-                        ui.label(
-                            egui::RichText::new(pos_text)
-                                .size(13.0)
-                                .color(colors.muted)
-                                .family(egui::FontFamily::Monospace),
+                        ui.add_sized(
+                            egui::vec2(STATUS_POSITION_WIDTH, 18.0),
+                            egui::Label::new(
+                                egui::RichText::new(pos_text).size(13.0).color(colors.text),
+                            ),
+                        );
+
+                        Self::separator(ui, &colors);
+
+                        let selection_text = selection_dimensions
+                            .map(|(width, height)| format!("Selection: {} x {}", width, height))
+                            .unwrap_or_else(|| String::from("Selection: --"));
+                        let selection_color = if selection_dimensions.is_some() {
+                            colors.text
+                        } else {
+                            colors.muted
+                        };
+                        ui.add_sized(
+                            egui::vec2(STATUS_SELECTION_WIDTH, 18.0),
+                            egui::Label::new(
+                                egui::RichText::new(selection_text)
+                                    .size(13.0)
+                                    .color(selection_color),
+                            ),
                         );
 
                         Self::separator(ui, &colors);

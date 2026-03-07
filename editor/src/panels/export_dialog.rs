@@ -3,6 +3,9 @@ use std::path::PathBuf;
 use eframe::egui;
 
 use crate::theme::{ThemeColors, theme_colors};
+use crate::widgets::icons;
+
+const EXPORT_ICON: &str = "\u{1F304}";
 
 pub struct ExportDialog {
     open: bool,
@@ -85,6 +88,7 @@ impl ExportDialog {
 
         // Dim the background
         egui::Area::new(egui::Id::new("export_backdrop"))
+            .order(egui::Order::Middle)
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
                 let response = ui.allocate_response(screen.size(), egui::Sense::click());
@@ -99,6 +103,7 @@ impl ExportDialog {
             });
 
         egui::Window::new("")
+            .order(egui::Order::Foreground)
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
@@ -114,13 +119,7 @@ impl ExportDialog {
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 
-                // Title
-                ui.label(
-                    egui::RichText::new("Export as PNG")
-                        .size(18.0)
-                        .strong()
-                        .color(colors.text),
-                );
+                draw_modal_title(ui, &colors, EXPORT_ICON, "Export as PNG");
 
                 ui.add_space(4.0);
 
@@ -234,6 +233,19 @@ impl ExportDialog {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
 
+                        let cancel_btn = ui.add(
+                            egui::Button::new(
+                                egui::RichText::new("Cancel").size(14.0).color(colors.text),
+                            )
+                            .fill(colors.bg_3)
+                            .stroke(egui::Stroke::new(1.0, colors.border))
+                            .corner_radius(4.0)
+                            .min_size(egui::vec2(80.0, 32.0)),
+                        );
+                        if cancel_btn.clicked() {
+                            self.open = false;
+                        }
+
                         let export_btn = ui.add(
                             egui::Button::new(
                                 egui::RichText::new("  Export  ")
@@ -277,19 +289,6 @@ impl ExportDialog {
                                 bg_color,
                                 tab_map,
                             };
-                            self.open = false;
-                        }
-
-                        let cancel_btn = ui.add(
-                            egui::Button::new(
-                                egui::RichText::new("Cancel").size(14.0).color(colors.text),
-                            )
-                            .fill(colors.bg_3)
-                            .stroke(egui::Stroke::new(1.0, colors.border))
-                            .corner_radius(4.0)
-                            .min_size(egui::vec2(80.0, 32.0)),
-                        );
-                        if cancel_btn.clicked() {
                             self.open = false;
                         }
                     });
@@ -363,4 +362,21 @@ impl ExportDialog {
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
         ui.painter().rect_filled(rect, 0.0, colors.border);
     }
+}
+
+fn draw_modal_title(ui: &mut egui::Ui, colors: &ThemeColors, icon: &str, title: &str) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        ui.label(
+            egui::RichText::new(icon)
+                .font(icons::symbol_icon_font_id(18.0))
+                .color(colors.text),
+        );
+        ui.label(
+            egui::RichText::new(title)
+                .size(18.0)
+                .strong()
+                .color(colors.text),
+        );
+    });
 }
