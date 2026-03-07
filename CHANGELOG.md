@@ -4,6 +4,26 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.0] - 2026-03-07
+
+### Added
+- Ground animation (`gndani.tbl`) and wall animation (`stcani.tbl`) playback in the main viewport, including animated prefab/paste/move ghost previews and animated eyedropper wall feedback.
+- Animated palette browsing for ground and wall tiles, with sequence-aware preview sizing so uneven animated wall frames stay stable in the inspector.
+- `Trim Canvas` for prefabs, which shrinks the prefab to its occupied bounds without losing painted data.
+
+### Changed
+- Animated tile and wall sequences now appear only once in the palette, using the sequence's starting frame as the canonical browser entry.
+- Prefab preview rendering in the inspector now animates and fits against the largest wall frame in each animation sequence to avoid jumping/clipping.
+- Map size changes, prefab `Resize Canvas...`, and prefab `Trim Canvas` are now undoable.
+- Prefab size actions now show `Trim Canvas` above `Resize Canvas...`, separated in the status-bar size menu.
+- Leaving the `Select` tool now clears the active selection.
+- Prefab inspector polish: the preview edit button now uses a hoverable pencil icon control, and the prefab search box now has a padded inline search icon and clearer empty-state copy.
+
+### Fixed
+- Ground animation lookup now matches the Chaos asset ID space instead of skipping valid animated tiles.
+- Wall animation preview sizing no longer jitters in the palette or prefab preview when frames have different heights.
+- Fast selection drag start is more responsive because the drag origin is latched from the initial mouse-down tile.
+
 ## [0.5.0] - 2026-03-07
 
 ### Added

@@ -7,7 +7,7 @@ use crate::{
     map_list::MapMetadataHint,
     prefab::{
         PrefabFile, centered_canvas_offset, load_prefab_asset, placement_anchor,
-        sanitize_prefab_name,
+        sanitize_prefab_name, trimmed_map,
     },
 };
 
@@ -90,7 +90,7 @@ impl TileSelection {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 #[allow(dead_code)]
 enum EditChange {
     Ground {
@@ -113,41 +113,70 @@ enum EditChange {
         old: map::Tile,
         new: map::Tile,
     },
+    ResizeMap {
+        old: map::Map,
+        new: map::Map,
+    },
 }
 
 impl EditChange {
     fn apply_undo(&self, map: &mut map::Map) {
-        let Some(tile) = map.tiles.get_mut(self.idx()) else {
-            return;
-        };
-
         match self {
-            EditChange::Ground { old, .. } => tile.ground = *old,
-            EditChange::LeftWall { old, .. } => tile.left_wall = *old,
-            EditChange::RightWall { old, .. } => tile.right_wall = *old,
-            EditChange::Tile { old, .. } => *tile = *old,
+            EditChange::Ground { idx, old, .. } => {
+                let Some(tile) = map.tiles.get_mut(*idx) else {
+                    return;
+                };
+                tile.ground = *old;
+            }
+            EditChange::LeftWall { idx, old, .. } => {
+                let Some(tile) = map.tiles.get_mut(*idx) else {
+                    return;
+                };
+                tile.left_wall = *old;
+            }
+            EditChange::RightWall { idx, old, .. } => {
+                let Some(tile) = map.tiles.get_mut(*idx) else {
+                    return;
+                };
+                tile.right_wall = *old;
+            }
+            EditChange::Tile { idx, old, .. } => {
+                let Some(tile) = map.tiles.get_mut(*idx) else {
+                    return;
+                };
+                *tile = *old;
+            }
+            EditChange::ResizeMap { old, .. } => *map = old.clone(),
         }
     }
 
     fn apply_redo(&self, map: &mut map::Map) {
-        let Some(tile) = map.tiles.get_mut(self.idx()) else {
-            return;
-        };
-
         match self {
-            EditChange::Ground { new, .. } => tile.ground = *new,
-            EditChange::LeftWall { new, .. } => tile.left_wall = *new,
-            EditChange::RightWall { new, .. } => tile.right_wall = *new,
-            EditChange::Tile { new, .. } => *tile = *new,
-        }
-    }
-
-    fn idx(&self) -> usize {
-        match self {
-            EditChange::Ground { idx, .. }
-            | EditChange::LeftWall { idx, .. }
-            | EditChange::RightWall { idx, .. }
-            | EditChange::Tile { idx, .. } => *idx,
+            EditChange::Ground { idx, new, .. } => {
+                let Some(tile) = map.tiles.get_mut(*idx) else {
+                    return;
+                };
+                tile.ground = *new;
+            }
+            EditChange::LeftWall { idx, new, .. } => {
+                let Some(tile) = map.tiles.get_mut(*idx) else {
+                    return;
+                };
+                tile.left_wall = *new;
+            }
+            EditChange::RightWall { idx, new, .. } => {
+                let Some(tile) = map.tiles.get_mut(*idx) else {
+                    return;
+                };
+                tile.right_wall = *new;
+            }
+            EditChange::Tile { idx, new, .. } => {
+                let Some(tile) = map.tiles.get_mut(*idx) else {
+                    return;
+                };
+                *tile = *new;
+            }
+            EditChange::ResizeMap { new, .. } => *map = new.clone(),
         }
     }
 }
@@ -202,6 +231,13 @@ impl LayerVisibility {
 pub struct StampResult {
     pub changed_tiles: usize,
     pub clipped_tiles: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrimCanvasResult {
+    Empty,
+    Unchanged,
+    Trimmed { width: u16, height: u16 },
 }
 
 pub struct MapDocument {
@@ -341,8 +377,12 @@ impl MapDocument {
         if width == 0 || height == 0 {
             return Err("Width and height must both be at least 1.".to_string());
         }
+        if width == self.map.width && height == self.map.height {
+            return Ok(());
+        }
 
-        let old_count = self.map.tiles.len();
+        let old_map = self.map.clone();
+        let old_count = old_map.tiles.len();
         let new_count = width as usize * height as usize;
 
         let mut new_tiles = Vec::new();
@@ -359,16 +399,20 @@ impl MapDocument {
         new_tiles.resize(new_count, map::Tile::default());
 
         let copy_count = old_count.min(new_count);
-        new_tiles[..copy_count].copy_from_slice(&self.map.tiles[..copy_count]);
+        new_tiles[..copy_count].copy_from_slice(&old_map.tiles[..copy_count]);
 
-        self.map.width = width;
-        self.map.height = height;
-        self.map.tiles = new_tiles;
+        let new_map = map::Map {
+            width,
+            height,
+            tiles: new_tiles,
+        };
+        self.map = new_map.clone();
         self.camera = Camera::default();
         self.selection = None;
-        self.dirty = true;
-        self.undo_stack.clear();
-        self.redo_stack.clear();
+        self.push_history(vec![EditChange::ResizeMap {
+            old: old_map,
+            new: new_map,
+        }]);
         Ok(())
     }
 
@@ -392,9 +436,9 @@ impl MapDocument {
         }
         new_tiles.resize(new_count, map::Tile::default());
 
-        let old_width = self.map.width;
-        let old_height = self.map.height;
-        let old_tiles = self.map.tiles.clone();
+        let old_map = self.map.clone();
+        let old_width = old_map.width;
+        let old_height = old_map.height;
         let col_offset = centered_canvas_offset(old_width, width);
         let row_offset = centered_canvas_offset(old_height, height);
 
@@ -412,19 +456,47 @@ impl MapDocument {
 
                 let src_idx = old_row as usize * old_width as usize + old_col as usize;
                 let dst_idx = new_row as usize * width as usize + new_col as usize;
-                new_tiles[dst_idx] = old_tiles[src_idx];
+                new_tiles[dst_idx] = old_map.tiles[src_idx];
             }
         }
 
-        self.map.width = width;
-        self.map.height = height;
-        self.map.tiles = new_tiles;
+        let new_map = map::Map {
+            width,
+            height,
+            tiles: new_tiles,
+        };
+        self.map = new_map.clone();
         self.camera = Camera::default();
         self.selection = None;
-        self.dirty = true;
-        self.undo_stack.clear();
-        self.redo_stack.clear();
+        self.push_history(vec![EditChange::ResizeMap {
+            old: old_map,
+            new: new_map,
+        }]);
         Ok(())
+    }
+
+    pub fn trim_canvas_to_content(&mut self) -> Result<TrimCanvasResult, String> {
+        self.finish_stroke();
+
+        let Some(trimmed) = trimmed_map(&self.map, true) else {
+            return Ok(TrimCanvasResult::Empty);
+        };
+
+        if trimmed.width == self.map.width && trimmed.height == self.map.height {
+            return Ok(TrimCanvasResult::Unchanged);
+        }
+
+        let old_map = self.map.clone();
+        let width = trimmed.width;
+        let height = trimmed.height;
+        self.map = trimmed.clone();
+        self.camera = Camera::default();
+        self.selection = None;
+        self.push_history(vec![EditChange::ResizeMap {
+            old: old_map,
+            new: trimmed,
+        }]);
+        Ok(TrimCanvasResult::Trimmed { width, height })
     }
 
     pub fn selection(&self) -> Option<TileSelection> {
@@ -994,6 +1066,13 @@ impl MapDocument {
         for change in &batch {
             change.apply_undo(&mut self.map);
         }
+        if batch
+            .iter()
+            .any(|change| matches!(change, EditChange::ResizeMap { .. }))
+        {
+            self.selection = None;
+            self.camera = Camera::default();
+        }
         self.redo_stack.push(batch);
         self.dirty = !self.undo_stack.is_empty();
         true
@@ -1008,6 +1087,13 @@ impl MapDocument {
 
         for change in &batch {
             change.apply_redo(&mut self.map);
+        }
+        if batch
+            .iter()
+            .any(|change| matches!(change, EditChange::ResizeMap { .. }))
+        {
+            self.selection = None;
+            self.camera = Camera::default();
         }
         self.undo_stack.push(batch);
         self.dirty = true;
@@ -1037,6 +1123,36 @@ mod tests {
         assert_eq!(doc.map.tiles[2].ground, 12);
         assert_eq!(doc.map.tiles[3].ground, 13);
         assert_eq!(doc.map.tiles[8].ground, 0);
+    }
+
+    #[test]
+    fn set_dimensions_supports_undo_redo() {
+        let mut doc = MapDocument::new_map(2, 2);
+        doc.map.tiles[0].ground = 10;
+        doc.map.tiles[1].ground = 11;
+        doc.map.tiles[2].left_wall = 12;
+        doc.map.tiles[3].right_wall = 13;
+
+        doc.set_dimensions(3, 3).unwrap();
+        assert_eq!(doc.map.width, 3);
+        assert_eq!(doc.map.height, 3);
+        assert!(doc.can_undo());
+
+        assert!(doc.undo());
+        assert_eq!(doc.map.width, 2);
+        assert_eq!(doc.map.height, 2);
+        assert_eq!(doc.map.tiles[0].ground, 10);
+        assert_eq!(doc.map.tiles[1].ground, 11);
+        assert_eq!(doc.map.tiles[2].left_wall, 12);
+        assert_eq!(doc.map.tiles[3].right_wall, 13);
+
+        assert!(doc.redo());
+        assert_eq!(doc.map.width, 3);
+        assert_eq!(doc.map.height, 3);
+        assert_eq!(doc.map.tiles[0].ground, 10);
+        assert_eq!(doc.map.tiles[1].ground, 11);
+        assert_eq!(doc.map.tiles[2].left_wall, 12);
+        assert_eq!(doc.map.tiles[3].right_wall, 13);
     }
 
     #[test]
@@ -1133,6 +1249,93 @@ mod tests {
         assert_eq!(doc.map.tiles[3].left_wall, 3);
         assert!(doc.map.tiles.iter().all(|tile| tile.right_wall != 4));
         assert!(doc.map.tiles.iter().all(|tile| tile.ground != 1));
+    }
+
+    #[test]
+    fn trim_canvas_to_content_removes_empty_border_without_losing_tiles() {
+        let mut doc = MapDocument::new_prefab(5, 5);
+        doc.map.tiles[1 * 5 + 2].ground = 7;
+        doc.map.tiles[2 * 5 + 3].left_wall = 11;
+        doc.map.tiles[3 * 5 + 4].right_wall = 13;
+
+        let result = doc.trim_canvas_to_content().unwrap();
+
+        assert_eq!(
+            result,
+            TrimCanvasResult::Trimmed {
+                width: 3,
+                height: 3
+            }
+        );
+        assert_eq!(doc.map.width, 3);
+        assert_eq!(doc.map.height, 3);
+        assert_eq!(doc.map.tiles[0].ground, 7);
+        assert_eq!(doc.map.tiles[1 * 3 + 1].left_wall, 11);
+        assert_eq!(doc.map.tiles[2 * 3 + 2].right_wall, 13);
+    }
+
+    #[test]
+    fn trim_canvas_to_content_reports_empty_prefab_without_resizing() {
+        let mut doc = MapDocument::new_prefab(6, 6);
+
+        let result = doc.trim_canvas_to_content().unwrap();
+
+        assert_eq!(result, TrimCanvasResult::Empty);
+        assert_eq!(doc.map.width, 6);
+        assert_eq!(doc.map.height, 6);
+    }
+
+    #[test]
+    fn resize_canvas_centered_supports_undo_redo() {
+        let mut doc = MapDocument::new_prefab(2, 2);
+        doc.map.tiles[0].ground = 1;
+        doc.map.tiles[3].right_wall = 4;
+
+        doc.resize_canvas_centered(4, 4).unwrap();
+        assert_eq!(doc.map.width, 4);
+        assert_eq!(doc.map.height, 4);
+        assert!(doc.can_undo());
+
+        assert!(doc.undo());
+        assert_eq!(doc.map.width, 2);
+        assert_eq!(doc.map.height, 2);
+        assert_eq!(doc.map.tiles[0].ground, 1);
+        assert_eq!(doc.map.tiles[3].right_wall, 4);
+
+        assert!(doc.redo());
+        assert_eq!(doc.map.width, 4);
+        assert_eq!(doc.map.height, 4);
+        assert_eq!(doc.map.tiles[1 * 4 + 1].ground, 1);
+        assert_eq!(doc.map.tiles[2 * 4 + 2].right_wall, 4);
+    }
+
+    #[test]
+    fn trim_canvas_to_content_supports_undo_redo() {
+        let mut doc = MapDocument::new_prefab(5, 5);
+        doc.map.tiles[1 * 5 + 1].ground = 7;
+        doc.map.tiles[3 * 5 + 4].left_wall = 9;
+
+        let result = doc.trim_canvas_to_content().unwrap();
+        assert_eq!(
+            result,
+            TrimCanvasResult::Trimmed {
+                width: 4,
+                height: 3
+            }
+        );
+        assert!(doc.can_undo());
+
+        assert!(doc.undo());
+        assert_eq!(doc.map.width, 5);
+        assert_eq!(doc.map.height, 5);
+        assert_eq!(doc.map.tiles[1 * 5 + 1].ground, 7);
+        assert_eq!(doc.map.tiles[3 * 5 + 4].left_wall, 9);
+
+        assert!(doc.redo());
+        assert_eq!(doc.map.width, 4);
+        assert_eq!(doc.map.height, 3);
+        assert_eq!(doc.map.tiles[0].ground, 7);
+        assert_eq!(doc.map.tiles[2 * 4 + 3].left_wall, 9);
     }
 
     #[test]

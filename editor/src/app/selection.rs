@@ -1,4 +1,5 @@
 use crate::document::{LayerVisibility, PaintLayer, TileSelection};
+use crate::panels::Tool;
 
 use super::EditorApp;
 
@@ -53,31 +54,99 @@ pub(super) enum SelectionDragMode {
 }
 
 impl EditorApp {
+    pub(super) fn finalize_selection_drag(&mut self, shift_held: bool) {
+        if self.active_tool != Tool::Select {
+            self.selection_drag_start_tile = None;
+            self.selection_drag_mode = None;
+            return;
+        }
+
+        let Some(mode) = self.selection_drag_mode.clone() else {
+            self.selection_drag_start_tile = None;
+            return;
+        };
+
+        let selection_move_layers = self.selection_move_layers();
+        let selection_duplicate_layers = self.selection_duplicate_layers();
+        let doc = &mut self.documents[self.active_tab];
+
+        if let SelectionDragMode::Moving {
+            original_selection,
+            created_from_empty,
+            ..
+        } = mode
+        {
+            let preview_selection = doc.selection().unwrap_or(original_selection);
+            let (preview_min_col, preview_min_row, _, _) = preview_selection.normalized_bounds();
+            let (original_min_col, original_min_row, _, _) = original_selection.normalized_bounds();
+            if preview_min_col != original_min_col || preview_min_row != original_min_row {
+                if shift_held {
+                    let source = doc.selection_map_for_visible_layers(
+                        original_selection,
+                        selection_duplicate_layers,
+                    );
+                    let (width, height) = original_selection.dimensions();
+                    let changed = doc.paste_visible_layers(
+                        (preview_min_col, preview_min_row),
+                        &source,
+                        selection_duplicate_layers,
+                    );
+                    doc.set_selection(Some(TileSelection::from_top_left_size(
+                        (preview_min_col, preview_min_row),
+                        width,
+                        height,
+                    )));
+                    if changed > 0 {
+                        self.status_message = format!(
+                            "Duplicated selection to {}, {}.",
+                            preview_min_col, preview_min_row
+                        );
+                    }
+                } else {
+                    let changed = doc.move_selection_visible_layers(
+                        original_selection,
+                        (preview_min_col, preview_min_row),
+                        selection_move_layers,
+                    );
+                    if changed > 0 {
+                        self.status_message = format!(
+                            "Moved selection to {}, {}.",
+                            preview_min_col, preview_min_row
+                        );
+                    }
+                }
+            } else if created_from_empty {
+                doc.set_selection(None);
+            } else {
+                doc.set_selection(Some(original_selection));
+            }
+        }
+
+        self.selection_drag_start_tile = None;
+        self.selection_drag_mode = None;
+    }
+
     pub(super) fn effective_selection_for_layers(
         &self,
         layers: LayerVisibility,
     ) -> Option<TileSelection> {
-        self.documents[self.active_tab]
-            .selection()
-            .or_else(|| {
-                let tile = self.hover_tile;
-                Self::tile_has_selection_layers(&self.documents[self.active_tab].map, tile, layers)
-                    .then_some(TileSelection::from_points(tile, tile))
-            })
+        self.documents[self.active_tab].selection().or_else(|| {
+            let tile = self.hover_tile;
+            Self::tile_has_selection_layers(&self.documents[self.active_tab].map, tile, layers)
+                .then_some(TileSelection::from_points(tile, tile))
+        })
     }
 
     pub(super) fn effective_selection_for_any_occupied_tile(&self) -> Option<TileSelection> {
-        self.documents[self.active_tab]
-            .selection()
-            .or_else(|| {
-                let tile = self.hover_tile;
-                Self::tile_has_selection_layers(
-                    &self.documents[self.active_tab].map,
-                    tile,
-                    LayerVisibility::default(),
-                )
-                .then_some(TileSelection::from_points(tile, tile))
-            })
+        self.documents[self.active_tab].selection().or_else(|| {
+            let tile = self.hover_tile;
+            Self::tile_has_selection_layers(
+                &self.documents[self.active_tab].map,
+                tile,
+                LayerVisibility::default(),
+            )
+            .then_some(TileSelection::from_points(tile, tile))
+        })
     }
 
     pub(super) fn selection_action_layers(&self, shift_held: bool) -> LayerVisibility {
@@ -209,14 +278,14 @@ impl EditorApp {
 
     pub(super) fn clear_active_selection(&mut self) -> bool {
         let doc = &mut self.documents[self.active_tab];
-        if doc.selection().is_none() {
-            return false;
-        }
+        let had_selection = doc.selection().is_some();
+        let had_drag_state =
+            self.selection_drag_start_tile.is_some() || self.selection_drag_mode.is_some();
 
         doc.set_selection(None);
         self.selection_drag_start_tile = None;
         self.selection_drag_mode = None;
-        true
+        had_selection || had_drag_state
     }
 
     pub(super) fn moved_selection_top_left(
